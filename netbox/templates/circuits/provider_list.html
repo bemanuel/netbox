@@ -1,7 +1,5 @@
 {% extends '_base.html' %}
 
-{% block title %}Providers{% endblock %}
-
 {% block content %}
 <div class="pull-right">
     {% if perms.circuits.add_provider %}
@@ -16,14 +14,13 @@
     {% endif %}
     {% include 'inc/export_button.html' with obj_type='providers' %}
 </div>
-<h1>Providers</h1>
+<h1>{% block title %}Providers{% endblock %}</h1>
 <div class="row">
     <div class="col-md-9">
         {% include 'utilities/obj_table.html' with bulk_edit_url='circuits:provider_bulk_edit' bulk_delete_url='circuits:provider_bulk_delete' %}
     </div>
     <div class="col-md-3">
 		{% include 'inc/search_panel.html' %}
-		{% include 'inc/filter_panel.html' %}
     </div>
 </div>
 {% endblock %}

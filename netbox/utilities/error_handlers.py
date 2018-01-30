@@ -1,13 +1,16 @@
+from __future__ import unicode_literals
+
 from django.contrib import messages
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
 
 
 def handle_protectederror(obj, request, e):
     """
     Generate a user-friendly error message in response to a ProtectedError exception.
     """
-    dependent_objects = e[1]
     try:
-        dep_class = dependent_objects[0]._meta.verbose_name_plural
+        dep_class = e.protected_objects[0]._meta.verbose_name_plural
     except IndexError:
         raise e
 
@@ -26,11 +29,11 @@ def handle_protectederror(obj, request, e):
 
     # Append dependent objects to error message
     dependent_objects = []
-    for o in e[1]:
-        if hasattr(o, 'get_absolute_url'):
-            dependent_objects.append('<a href="{}">{}</a>'.format(o.get_absolute_url(), str(o)))
+    for obj in e.protected_objects:
+        if hasattr(obj, 'get_absolute_url'):
+            dependent_objects.append('<a href="{}">{}</a>'.format(obj.get_absolute_url(), escape(obj)))
         else:
-            dependent_objects.append(str(o))
+            dependent_objects.append(str(obj))
     err_message += ', '.join(dependent_objects)
 
-    messages.error(request, err_message)
+    messages.error(request, mark_safe(err_message))

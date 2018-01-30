@@ -1,8 +1,8 @@
-from markdown import markdown
+from __future__ import unicode_literals
 
 from django import template
 from django.utils.safestring import mark_safe
-
+from markdown import markdown
 
 register = template.Library()
 
@@ -27,6 +27,14 @@ def getlist(value, arg):
     return value.getlist(arg)
 
 
+@register.filter
+def getkey(value, key):
+    """
+    Return a dictionary item specified by key
+    """
+    return value[key]
+
+
 @register.filter(is_safe=True)
 def gfm(value):
     """
@@ -37,29 +45,76 @@ def gfm(value):
 
 
 @register.filter()
-def startswith(value, arg):
+def model_name(obj):
     """
-    Test whether a string starts with the given argument
+    Return the name of the model of the given object
     """
-    return str(value).startswith(arg)
+    return obj._meta.verbose_name
 
 
 @register.filter()
-def user_can_add(model, user):
-    perm_name = '{}:add_{}'.format(model._meta.app_label, model.__class__.__name__.lower())
-    return user.has_perm(perm_name)
+def model_name_plural(obj):
+    """
+    Return the plural name of the model of the given object
+    """
+    return obj._meta.verbose_name_plural
 
 
 @register.filter()
-def user_can_change(model, user):
-    perm_name = '{}:change_{}'.format(model._meta.app_label, model.__class__.__name__.lower())
-    return user.has_perm(perm_name)
+def contains(value, arg):
+    """
+    Test whether a value contains any of a given set of strings. `arg` should be a comma-separated list of strings.
+    """
+    return any(s in value for s in arg.split(','))
 
 
 @register.filter()
-def user_can_delete(model, user):
-    perm_name = '{}:delete_{}'.format(model._meta.app_label, model.__class__.__name__.lower())
-    return user.has_perm(perm_name)
+def bettertitle(value):
+    """
+    Alternative to the builtin title(); uppercases words without replacing letters that are already uppercase.
+    """
+    return ' '.join([w[0].upper() + w[1:] for w in value.split()])
+
+
+@register.filter()
+def humanize_speed(speed):
+    """
+    Humanize speeds given in Kbps. Examples:
+
+        1544 => "1.544 Mbps"
+        100000 => "100 Mbps"
+        10000000 => "10 Gbps"
+    """
+    if speed >= 1000000000 and speed % 1000000000 == 0:
+        return '{} Tbps'.format(int(speed / 1000000000))
+    elif speed >= 1000000 and speed % 1000000 == 0:
+        return '{} Gbps'.format(int(speed / 1000000))
+    elif speed >= 1000 and speed % 1000 == 0:
+        return '{} Mbps'.format(int(speed / 1000))
+    elif speed >= 1000:
+        return '{} Mbps'.format(float(speed) / 1000)
+    else:
+        return '{} Kbps'.format(speed)
+
+
+@register.filter()
+def example_choices(field, arg=3):
+    """
+    Returns a number (default: 3) of example choices for a ChoiceFiled (useful for CSV import forms).
+    """
+    examples = []
+    if hasattr(field, 'queryset'):
+        choices = [(obj.pk, getattr(obj, field.to_field_name)) for obj in field.queryset[:arg + 1]]
+    else:
+        choices = field.choices
+    for id, label in choices:
+        if len(examples) == arg:
+            examples.append('etc.')
+            break
+        if not id:
+            continue
+        examples.append(label)
+    return ', '.join(examples) or 'None'
 
 
 #
@@ -67,30 +122,17 @@ def user_can_delete(model, user):
 #
 
 @register.simple_tag()
-def querystring_toggle(request, multi=True, page_key='page', **kwargs):
+def querystring(request, **kwargs):
     """
-    Add or remove a parameter in the HTTP GET query string
+    Append or update the page number in a querystring.
     """
-    new_querydict = request.GET.copy()
-
-    # Remove page number from querystring
-    try:
-        new_querydict.pop(page_key)
-    except KeyError:
-        pass
-
-    # Add/toggle parameters
+    querydict = request.GET.copy()
     for k, v in kwargs.items():
-        values = new_querydict.getlist(k)
-        if k in new_querydict and v in values:
-            values.remove(v)
-            new_querydict.setlist(k, values)
-        elif not multi:
-            new_querydict[k] = v
-        else:
-            new_querydict.update({k: v})
-
-    querystring = new_querydict.urlencode()
+        if v is not None:
+            querydict[k] = v
+        elif k in querydict:
+            querydict.pop(k)
+    querystring = querydict.urlencode(safe='/')
     if querystring:
         return '?' + querystring
     else:

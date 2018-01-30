@@ -1,30 +1,74 @@
+from __future__ import unicode_literals
+
 import csv
 import itertools
 import re
 
 from django import forms
 from django.conf import settings
-from django.core.urlresolvers import reverse_lazy
-from django.core.validators import URLValidator
-from django.utils.encoding import force_text
-from django.utils.html import format_html
-from django.utils.safestring import mark_safe
+from django.urls import reverse_lazy
+from mptt.forms import TreeNodeMultipleChoiceField
+
+from .validators import EnhancedURLValidator
+
+COLOR_CHOICES = (
+    ('aa1409', 'Dark red'),
+    ('f44336', 'Red'),
+    ('e91e63', 'Pink'),
+    ('ff66ff', 'Fuschia'),
+    ('9c27b0', 'Purple'),
+    ('673ab7', 'Dark purple'),
+    ('3f51b5', 'Indigo'),
+    ('2196f3', 'Blue'),
+    ('03a9f4', 'Light blue'),
+    ('00bcd4', 'Cyan'),
+    ('009688', 'Teal'),
+    ('2f6a31', 'Dark green'),
+    ('4caf50', 'Green'),
+    ('8bc34a', 'Light green'),
+    ('cddc39', 'Lime'),
+    ('ffeb3b', 'Yellow'),
+    ('ffc107', 'Amber'),
+    ('ff9800', 'Orange'),
+    ('ff5722', 'Dark orange'),
+    ('795548', 'Brown'),
+    ('c0c0c0', 'Light grey'),
+    ('9e9e9e', 'Grey'),
+    ('607d8b', 'Dark grey'),
+    ('111111', 'Black'),
+)
+NUMERIC_EXPANSION_PATTERN = '\[((?:\d+[?:,-])+\d+)\]'
+IP4_EXPANSION_PATTERN = '\[((?:[0-9]{1,3}[?:,-])+[0-9]{1,3})\]'
+IP6_EXPANSION_PATTERN = '\[((?:[0-9a-f]{1,4}[?:,-])+[0-9a-f]{1,4})\]'
 
 
-NUMERIC_EXPANSION_PATTERN = '\[(\d+-\d+)\]'
-IP4_EXPANSION_PATTERN = '\[([0-9]{1,3}-[0-9]{1,3})\]'
-IP6_EXPANSION_PATTERN = '\[([0-9a-f]{1,4}-[0-9a-f]{1,4})\]'
+def parse_numeric_range(string, base=10):
+    """
+    Expand a numeric range (continuous or not) into a decimal or
+    hexadecimal list, as specified by the base parameter
+      '0-3,5' => [0, 1, 2, 3, 5]
+      '2,8-b,d,f' => [2, 8, 9, a, b, d, f]
+    """
+    values = list()
+    for dash_range in string.split(','):
+        try:
+            begin, end = dash_range.split('-')
+        except ValueError:
+            begin, end = dash_range, dash_range
+        begin, end = int(begin.strip(), base=base), int(end.strip(), base=base) + 1
+        values.extend(range(begin, end))
+    return list(set(values))
 
 
 def expand_numeric_pattern(string):
     """
     Expand a numeric pattern into a list of strings. Examples:
-      'ge-0/0/[0-3]' => ['ge-0/0/0', 'ge-0/0/1', 'ge-0/0/2', 'ge-0/0/3']
-      'xe-0/[0-3]/[0-7]' => ['xe-0/0/0', 'xe-0/0/1', 'xe-0/0/2', ... 'xe-0/3/5', 'xe-0/3/6', 'xe-0/3/7']
+      'ge-0/0/[0-3,5]' => ['ge-0/0/0', 'ge-0/0/1', 'ge-0/0/2', 'ge-0/0/3', 'ge-0/0/5']
+      'xe-0/[0,2-3]/[0-7]' => ['xe-0/0/0', 'xe-0/0/1', 'xe-0/0/2', ... 'xe-0/3/5', 'xe-0/3/6', 'xe-0/3/7']
     """
     lead, pattern, remnant = re.split(NUMERIC_EXPANSION_PATTERN, string, maxsplit=1)
-    x, y = pattern.split('-')
-    for i in range(int(x), int(y) + 1):
+    parsed_range = parse_numeric_range(pattern)
+    for i in parsed_range:
         if re.search(NUMERIC_EXPANSION_PATTERN, remnant):
             for string in expand_numeric_pattern(remnant):
                 yield "{}{}{}".format(lead, i, string)
@@ -35,8 +79,8 @@ def expand_numeric_pattern(string):
 def expand_ipaddress_pattern(string, family):
     """
     Expand an IP address pattern into a list of strings. Examples:
-      '192.0.2.[1-254]/24' => ['192.0.2.1/24', '192.0.2.2/24', '192.0.2.3/24' ... '192.0.2.254/24']
-      '2001:db8:0:[0-ff]::/64' => ['2001:db8:0:0::/64', '2001:db8:0:1::/64', ... '2001:db8:0:ff::/64']
+      '192.0.2.[1,2,100-250,254]/24' => ['192.0.2.1/24', '192.0.2.2/24', '192.0.2.100/24' ... '192.0.2.250/24', '192.0.2.254/24']
+      '2001:db8:0:[0,fd-ff]::/64' => ['2001:db8:0:0::/64', '2001:db8:0:fd::/64', ... '2001:db8:0:ff::/64']
     """
     if family not in [4, 6]:
         raise Exception("Invalid IP address family: {}".format(family))
@@ -47,8 +91,8 @@ def expand_ipaddress_pattern(string, family):
         regex = IP6_EXPANSION_PATTERN
         base = 16
     lead, pattern, remnant = re.split(regex, string, maxsplit=1)
-    x, y = pattern.split('-')
-    for i in range(int(x, base), int(y, base) + 1):
+    parsed_range = parse_numeric_range(pattern, base)
+    for i in parsed_range:
         if re.search(regex, remnant):
             for string in expand_ipaddress_pattern(remnant, family):
                 yield ''.join([lead, format(i, 'x' if family == 6 else 'd'), string])
@@ -71,37 +115,55 @@ class SmallTextarea(forms.Textarea):
     pass
 
 
+class ColorSelect(forms.Select):
+    """
+    Extends the built-in Select widget to colorize each <option>.
+    """
+    option_template_name = 'colorselect_option.html'
+
+    def __init__(self, *args, **kwargs):
+        kwargs['choices'] = COLOR_CHOICES
+        super(ColorSelect, self).__init__(*args, **kwargs)
+
+
+class BulkEditNullBooleanSelect(forms.NullBooleanSelect):
+
+    def __init__(self, *args, **kwargs):
+        super(BulkEditNullBooleanSelect, self).__init__(*args, **kwargs)
+
+        # Override the built-in choice labels
+        self.choices = (
+            ('1', '---------'),
+            ('2', 'Yes'),
+            ('3', 'No'),
+        )
+
+
 class SelectWithDisabled(forms.Select):
     """
     Modified the stock Select widget to accept choices using a dict() for a label. The dict for each option must include
     'label' (string) and 'disabled' (boolean).
     """
+    option_template_name = 'selectwithdisabled_option.html'
 
-    def render_option(self, selected_choices, option_value, option_label):
 
-        # Determine if option has been selected
-        option_value = force_text(option_value)
-        if option_value in selected_choices:
-            selected_html = mark_safe(' selected="selected"')
-            if not self.allow_multiple_selected:
-                # Only allow for a single selection.
-                selected_choices.remove(option_value)
-        else:
-            selected_html = ''
+class ArrayFieldSelectMultiple(SelectWithDisabled, forms.SelectMultiple):
+    """
+    MultiSelect widget for a SimpleArrayField. Choices must be populated on the widget.
+    """
+    def __init__(self, *args, **kwargs):
+        self.delimiter = kwargs.pop('delimiter', ',')
+        super(ArrayFieldSelectMultiple, self).__init__(*args, **kwargs)
 
-        # Determine if option has been disabled
-        option_disabled = False
-        exempt_value = force_text(self.attrs.get('exempt', None))
-        if isinstance(option_label, dict):
-            option_disabled = option_label['disabled'] if option_value != exempt_value else False
-            option_label = option_label['label']
-        disabled_html = ' disabled="disabled"' if option_disabled else ''
+    def optgroups(self, name, value, attrs=None):
+        # Split the delimited string of values into a list
+        value = value[0].split(self.delimiter)
+        return super(ArrayFieldSelectMultiple, self).optgroups(name, value, attrs)
 
-        return format_html(u'<option value="{}"{}{}>{}</option>',
-                           option_value,
-                           selected_html,
-                           disabled_html,
-                           force_text(option_label))
+    def value_from_datadict(self, data, files, name):
+        # Condense the list of selected choices into a delimited string
+        data = super(ArrayFieldSelectMultiple, self).value_from_datadict(data, files, name)
+        return self.delimiter.join(data)
 
 
 class APISelect(SelectWithDisabled):
@@ -123,6 +185,10 @@ class APISelect(SelectWithDisabled):
             self.attrs['display-field'] = display_field
         if disabled_indicator:
             self.attrs['disabled-indicator'] = disabled_indicator
+
+
+class APISelectMultiple(APISelect):
+    allow_multiple_selected = True
 
 
 class Livesearch(forms.TextInput):
@@ -155,41 +221,77 @@ class Livesearch(forms.TextInput):
 
 class CSVDataField(forms.CharField):
     """
-    A field for comma-separated values (CSV). Values containing commas should be encased within double quotes. Example:
-        '"New York, NY",new-york-ny,Other stuff' => ['New York, NY', 'new-york-ny', 'Other stuff']
+    A CharField (rendered as a Textarea) which accepts CSV-formatted data. It returns a list of dictionaries mapping
+    column headers to values. Each dictionary represents an individual record.
     """
-    csv_form = None
     widget = forms.Textarea
 
-    def __init__(self, csv_form, *args, **kwargs):
-        self.csv_form = csv_form
-        self.columns = self.csv_form().fields.keys()
+    def __init__(self, fields, required_fields=[], *args, **kwargs):
+
+        self.fields = fields
+        self.required_fields = required_fields
+
         super(CSVDataField, self).__init__(*args, **kwargs)
+
         self.strip = False
         if not self.label:
             self.label = 'CSV Data'
+        if not self.initial:
+            self.initial = ','.join(required_fields) + '\n'
         if not self.help_text:
-            self.help_text = 'Enter one line per record in CSV format.'
-
-    def utf_8_encoder(self, unicode_csv_data):
-        for line in unicode_csv_data:
-            yield line.encode('utf-8')
+            self.help_text = 'Enter the list of column headers followed by one line per record to be imported, using ' \
+                             'commas to separate values. Multi-line data and values containing commas may be wrapped ' \
+                             'in double quotes.'
 
     def to_python(self, value):
-        # Return a list of dictionaries, each representing an individual record
+
+        # Python 2's csv module has problems with Unicode
+        if not isinstance(value, str):
+            value = value.encode('utf-8')
+
         records = []
-        reader = csv.reader(self.utf_8_encoder(value.splitlines()))
+        reader = csv.reader(value.splitlines())
+
+        # Consume and valdiate the first line of CSV data as column headers
+        headers = next(reader)
+        for f in self.required_fields:
+            if f not in headers:
+                raise forms.ValidationError('Required column header "{}" not found.'.format(f))
+        for f in headers:
+            if f not in self.fields:
+                raise forms.ValidationError('Unexpected column header "{}" found.'.format(f))
+
+        # Parse CSV data
         for i, row in enumerate(reader, start=1):
             if row:
-                if len(row) < len(self.columns):
-                    raise forms.ValidationError("Line {}: Field(s) missing (found {}; expected {})"
-                                                .format(i, len(row), len(self.columns)))
-                elif len(row) > len(self.columns):
-                    raise forms.ValidationError("Line {}: Too many fields (found {}; expected {})"
-                                                .format(i, len(row), len(self.columns)))
-                record = dict(zip(self.columns, row))
+                if len(row) != len(headers):
+                    raise forms.ValidationError(
+                        "Row {}: Expected {} columns but found {}".format(i, len(headers), len(row))
+                    )
+                row = [col.strip() for col in row]
+                record = dict(zip(headers, row))
                 records.append(record)
+
         return records
+
+
+class CSVChoiceField(forms.ChoiceField):
+    """
+    Invert the provided set of choices to take the human-friendly label as input, and return the database value.
+    """
+
+    def __init__(self, choices, *args, **kwargs):
+        super(CSVChoiceField, self).__init__(choices, *args, **kwargs)
+        self.choices = [(label, label) for value, label in choices]
+        self.choice_values = {label: value for value, label in choices}
+
+    def clean(self, value):
+        value = super(CSVChoiceField, self).clean(value)
+        if not value:
+            return None
+        if value not in self.choice_values:
+            raise forms.ValidationError("Invalid choice: {}".format(value))
+        return self.choice_values[value]
 
 
 class ExpandableNameField(forms.CharField):
@@ -201,7 +303,7 @@ class ExpandableNameField(forms.CharField):
         super(ExpandableNameField, self).__init__(*args, **kwargs)
         if not self.help_text:
             self.help_text = 'Numeric ranges are supported for bulk creation.<br />'\
-                             'Example: <code>ge-0/0/[0-47]</code>'
+                             'Example: <code>ge-0/0/[0-23,25,30]</code>'
 
     def to_python(self, value):
         if re.search(NUMERIC_EXPANSION_PATTERN, value):
@@ -218,7 +320,7 @@ class ExpandableIPAddressField(forms.CharField):
         super(ExpandableIPAddressField, self).__init__(*args, **kwargs)
         if not self.help_text:
             self.help_text = 'Specify a numeric range to create multiple IPs.<br />'\
-                             'Example: <code>192.0.2.[1-254]/24</code>'
+                             'Example: <code>192.0.2.[1,5,100-254]/24</code>'
 
     def to_python(self, value):
         # Hackish address family detection but it's all we have to work with
@@ -234,6 +336,7 @@ class CommentField(forms.CharField):
     A textarea with support for GitHub-Flavored Markdown. Exists mostly just to add a standard help_text.
     """
     widget = forms.Textarea
+    default_label = 'Comments'
     # TODO: Port GFM syntax cheat sheet to internal documentation
     default_helptext = '<i class="fa fa-info-circle"></i> '\
                        '<a href="https://github.com/adam-p/markdown-here/wiki/Markdown-Cheatsheet" target="_blank">'\
@@ -241,8 +344,9 @@ class CommentField(forms.CharField):
 
     def __init__(self, *args, **kwargs):
         required = kwargs.pop('required', False)
+        label = kwargs.pop('label', self.default_label)
         help_text = kwargs.pop('help_text', self.default_helptext)
-        super(CommentField, self).__init__(required=required, help_text=help_text, *args, **kwargs)
+        super(CommentField, self).__init__(required=required, label=label, help_text=help_text, *args, **kwargs)
 
 
 class FlexibleModelChoiceField(forms.ModelChoiceField):
@@ -266,6 +370,34 @@ class FlexibleModelChoiceField(forms.ModelChoiceField):
         return value
 
 
+class ChainedModelChoiceField(forms.ModelChoiceField):
+    """
+    A ModelChoiceField which is initialized based on the values of other fields within a form. `chains` is a dictionary
+    mapping of model fields to peer fields within the form. For example:
+
+        country1 = forms.ModelChoiceField(queryset=Country.objects.all())
+        city1 = ChainedModelChoiceField(queryset=City.objects.all(), chains={'country': 'country1'}
+
+    The queryset of the `city1` field will be modified as
+
+        .filter(country=<value>)
+
+    where <value> is the value of the `country1` field. (Note: The form must inherit from ChainedFieldsMixin.)
+    """
+    def __init__(self, chains=None, *args, **kwargs):
+        self.chains = chains
+        super(ChainedModelChoiceField, self).__init__(*args, **kwargs)
+
+
+class ChainedModelMultipleChoiceField(forms.ModelMultipleChoiceField):
+    """
+    See ChainedModelChoiceField
+    """
+    def __init__(self, chains=None, *args, **kwargs):
+        self.chains = chains
+        super(ChainedModelMultipleChoiceField, self).__init__(*args, **kwargs)
+
+
 class SlugField(forms.SlugField):
 
     def __init__(self, slug_source='name', *args, **kwargs):
@@ -275,7 +407,7 @@ class SlugField(forms.SlugField):
         self.widget.attrs['slug-source'] = slug_source
 
 
-class FilterChoiceField(forms.ModelMultipleChoiceField):
+class FilterChoiceFieldMixin(object):
     iterator = forms.models.ModelChoiceIterator
 
     def __init__(self, null_option=None, *args, **kwargs):
@@ -284,12 +416,13 @@ class FilterChoiceField(forms.ModelMultipleChoiceField):
             kwargs['required'] = False
         if 'widget' not in kwargs:
             kwargs['widget'] = forms.SelectMultiple(attrs={'size': 6})
-        super(FilterChoiceField, self).__init__(*args, **kwargs)
+        super(FilterChoiceFieldMixin, self).__init__(*args, **kwargs)
 
     def label_from_instance(self, obj):
+        label = super(FilterChoiceFieldMixin, self).label_from_instance(obj)
         if hasattr(obj, 'filter_count'):
-            return u'{} ({})'.format(obj, obj.filter_count)
-        return force_text(obj)
+            return '{} ({})'.format(label, obj.filter_count)
+        return label
 
     def _get_choices(self):
         if hasattr(self, '_choices'):
@@ -301,19 +434,21 @@ class FilterChoiceField(forms.ModelMultipleChoiceField):
     choices = property(_get_choices, forms.ChoiceField._set_choices)
 
 
+class FilterChoiceField(FilterChoiceFieldMixin, forms.ModelMultipleChoiceField):
+    pass
+
+
+class FilterTreeNodeMultipleChoiceField(FilterChoiceFieldMixin, TreeNodeMultipleChoiceField):
+    pass
+
+
 class LaxURLField(forms.URLField):
     """
-    Custom URLField which allows any valid URL scheme
+    Modifies Django's built-in URLField in two ways:
+      1) Allow any valid scheme per RFC 3986 section 3.1
+      2) Remove the requirement for fully-qualified domain names (e.g. http://myserver/ is valid)
     """
-
-    class AnyURLScheme(object):
-        # A fake URL list which "contains" all scheme names abiding by the syntax defined in RFC 3986 section 3.1
-        def __contains__(self, item):
-            if not item or not re.match('^[a-z][0-9a-z+\-.]*$', item.lower()):
-                return False
-            return True
-
-    default_validators = [URLValidator(schemes=AnyURLScheme())]
+    default_validators = [EnhancedURLValidator()]
 
 
 #
@@ -324,20 +459,74 @@ class BootstrapMixin(forms.BaseForm):
 
     def __init__(self, *args, **kwargs):
         super(BootstrapMixin, self).__init__(*args, **kwargs)
+
+        exempt_widgets = [forms.CheckboxInput, forms.ClearableFileInput, forms.FileInput, forms.RadioSelect]
+
         for field_name, field in self.fields.items():
-            if type(field.widget) not in [type(forms.CheckboxInput()), type(forms.RadioSelect())]:
-                try:
-                    field.widget.attrs['class'] += ' form-control'
-                except KeyError:
-                    field.widget.attrs['class'] = 'form-control'
-            if field.required:
+            if field.widget.__class__ not in exempt_widgets:
+                css = field.widget.attrs.get('class', '')
+                field.widget.attrs['class'] = ' '.join([css, 'form-control']).strip()
+            if field.required and not isinstance(field.widget, forms.FileInput):
                 field.widget.attrs['required'] = 'required'
             if 'placeholder' not in field.widget.attrs:
                 field.widget.attrs['placeholder'] = field.label
 
 
-class ConfirmationForm(forms.Form, BootstrapMixin):
-    confirm = forms.BooleanField(required=True)
+class ChainedFieldsMixin(forms.BaseForm):
+    """
+    Iterate through all ChainedModelChoiceFields in the form and modify their querysets based on chained fields.
+    """
+    def __init__(self, *args, **kwargs):
+        super(ChainedFieldsMixin, self).__init__(*args, **kwargs)
+
+        for field_name, field in self.fields.items():
+
+            if isinstance(field, ChainedModelChoiceField):
+
+                filters_dict = {}
+                for (db_field, parent_field) in field.chains:
+                    if self.is_bound and parent_field in self.data:
+                        filters_dict[db_field] = self.data[parent_field] or None
+                    elif self.initial.get(parent_field):
+                        filters_dict[db_field] = self.initial[parent_field]
+                    elif self.fields[parent_field].widget.attrs.get('nullable'):
+                        filters_dict[db_field] = None
+                    else:
+                        break
+
+                if filters_dict:
+                    field.queryset = field.queryset.filter(**filters_dict)
+                elif not self.is_bound and getattr(self, 'instance', None) and hasattr(self.instance, field_name):
+                    obj = getattr(self.instance, field_name)
+                    if obj is not None:
+                        field.queryset = field.queryset.filter(pk=obj.pk)
+                    else:
+                        field.queryset = field.queryset.none()
+                elif not self.is_bound:
+                    field.queryset = field.queryset.none()
+
+
+class ReturnURLForm(forms.Form):
+    """
+    Provides a hidden return URL field to control where the user is directed after the form is submitted.
+    """
+    return_url = forms.CharField(required=False, widget=forms.HiddenInput())
+
+
+class ConfirmationForm(BootstrapMixin, ReturnURLForm):
+    """
+    A generic confirmation form. The form is not valid unless the confirm field is checked.
+    """
+    confirm = forms.BooleanField(required=True, widget=forms.HiddenInput(), initial=True)
+
+
+class ComponentForm(BootstrapMixin, forms.Form):
+    """
+    Allow inclusion of the parent Device/VirtualMachine as context for limiting field choices.
+    """
+    def __init__(self, parent, *args, **kwargs):
+        self.parent = parent
+        super(ComponentForm, self).__init__(*args, **kwargs)
 
 
 class BulkEditForm(forms.Form):
@@ -350,28 +539,3 @@ class BulkEditForm(forms.Form):
             self.nullable_fields = [field for field in self.Meta.nullable_fields]
         else:
             self.nullable_fields = []
-
-
-class BulkImportForm(forms.Form):
-
-    def clean(self):
-        records = self.cleaned_data.get('csv')
-        if not records:
-            return
-
-        obj_list = []
-
-        for i, record in enumerate(records, start=1):
-            obj_form = self.fields['csv'].csv_form(data=record)
-            if obj_form.is_valid():
-                obj = obj_form.save(commit=False)
-                obj_list.append(obj)
-            else:
-                for field, errors in obj_form.errors.items():
-                    for e in errors:
-                        if field == '__all__':
-                            self.add_error('csv', "Record {}: {}".format(i, e))
-                        else:
-                            self.add_error('csv', "Record {} ({}): {}".format(i, field, e))
-
-        self.cleaned_data['csv'] = obj_list

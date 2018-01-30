@@ -7,7 +7,6 @@
         <div class="panel-body">
             {% render_field form.name %}
             {% render_field form.device_role %}
-            {% render_field form.tenant %}
         </div>
     </div>
     <div class="panel panel-default">
@@ -46,7 +45,7 @@
                         </p>
                     </div>
                 </div>
-            {% elif not obj.device_type.is_child_device %}
+            {% else %}
                 {% render_field form.face %}
                 {% render_field form.position %}
             {% endif %}
@@ -55,12 +54,19 @@
     <div class="panel panel-default">
         <div class="panel-heading"><strong>Management</strong></div>
         <div class="panel-body">
-            {% render_field form.platform %}
             {% render_field form.status %}
-            {% if obj %}
+            {% render_field form.platform %}
+            {% if obj.pk %}
                 {% render_field form.primary_ip4 %}
                 {% render_field form.primary_ip6 %}
             {% endif %}
+        </div>
+    </div>
+    <div class="panel panel-default">
+        <div class="panel-heading"><strong>Tenancy</strong></div>
+        <div class="panel-body">
+            {% render_field form.tenant_group %}
+            {% render_field form.tenant %}
         </div>
     </div>
     {% if form.custom_fields %}

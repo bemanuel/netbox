@@ -1,19 +1,31 @@
-from django.conf.urls import url
+from __future__ import unicode_literals
 
-from .views import *
+from rest_framework import routers
+
+from . import views
 
 
-urlpatterns = [
+class SecretsRootView(routers.APIRootView):
+    """
+    Secrets API root view
+    """
+    def get_view_name(self):
+        return 'Secrets'
 
-    # Secrets
-    url(r'^secrets/$', SecretListView.as_view(), name='secret_list'),
-    url(r'^secrets/(?P<pk>\d+)/$', SecretDetailView.as_view(), name='secret_detail'),
 
-    # Secret roles
-    url(r'^secret-roles/$', SecretRoleListView.as_view(), name='secretrole_list'),
-    url(r'^secret-roles/(?P<pk>\d+)/$', SecretRoleDetailView.as_view(), name='secretrole_detail'),
+router = routers.DefaultRouter()
+router.APIRootView = SecretsRootView
 
-    # Miscellaneous
-    url(r'^generate-keys/$', RSAKeyGeneratorView.as_view(), name='generate_keys'),
+# Field choices
+router.register(r'_choices', views.SecretsFieldChoicesViewSet, base_name='field-choice')
 
-]
+# Secrets
+router.register(r'secret-roles', views.SecretRoleViewSet)
+router.register(r'secrets', views.SecretViewSet)
+
+# Miscellaneous
+router.register(r'get-session-key', views.GetSessionKeyViewSet, base_name='get-session-key')
+router.register(r'generate-rsa-key-pair', views.GenerateRSAKeyPairViewSet, base_name='generate-rsa-key-pair')
+
+app_name = 'secrets-api'
+urlpatterns = router.urls

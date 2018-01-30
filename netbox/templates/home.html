@@ -1,67 +1,9 @@
 {% extends '_base.html' %}
-{% load render_table from django_tables2 %}
 
 {% block content %}
-<div class="row home-search" style="padding: 15px 0px 20px">
-	<div class="col-md-3">
-		<form action="{% url 'dcim:device_list' %}" method="get">
-			<div class="input-group">
-				<input type="text" name="q" placeholder="Search devices" class="form-control" />
-				<span class="input-group-btn">
-					<button type="submit" class="btn btn-primary">
-						<span class="fa fa-search" aria-hidden="true"></span>
-						Devices
-					</button>
-				</span>
-			</div>
-		</form>
-		<p></p>
-	</div>
-	<div class="col-md-3">
-		<form action="{% url 'ipam:prefix_list' %}" method="get">
-			<div class="input-group">
-				<input type="text" name="q" placeholder="Search prefixes" class="form-control" />
-				<span class="input-group-btn">
-					<button type="submit" class="btn btn-primary">
-						<span class="fa fa-search" aria-hidden="true"></span>
-						Prefixes
-					</button>
-				</span>
-			</div>
-		</form>
-		<p></p>
-	</div>
-	<div class="col-md-3">
-		<form action="{% url 'ipam:ipaddress_list' %}" method="get">
-			<div class="input-group">
-				<input type="text" name="q" placeholder="Search IPs" class="form-control" />
-				<span class="input-group-btn">
-					<button type="submit" class="btn btn-primary">
-						<span class="fa fa-search" aria-hidden="true"></span>
-						IPs
-					</button>
-				</span>
-			</div>
-		</form>
-		<p></p>
-	</div>
-	<div class="col-md-3">
-		<form action="{% url 'circuits:circuit_list' %}" method="get">
-			<div class="input-group">
-				<input type="text" name="q" placeholder="Search circuits" class="form-control" />
-				<span class="input-group-btn">
-					<button type="submit" class="btn btn-primary">
-						<span class="fa fa-search" aria-hidden="true"></span>
-						Circuits
-					</button>
-				</span>
-			</div>
-		</form>
-		<p></p>
-	</div>
-</div>
+{% include 'search_form.html' %}
 <div class="row">
-    <div class="col-md-4">
+    <div class="col-sm-6 col-md-4">
         <div class="panel panel-default">
             <div class="panel-heading">
                 <strong>Organization</strong>
@@ -105,8 +47,25 @@
                 </div>
             </div>
         </div>
+        <div class="panel panel-default">
+            <div class="panel-heading">
+                <strong>Virtualization</strong>
+            </div>
+            <div class="list-group">
+                <div class="list-group-item">
+                    <span class="badge pull-right">{{ stats.cluster_count }}</span>
+                    <h4 class="list-group-item-heading"><a href="{% url 'virtualization:cluster_list' %}">Clusters</a></h4>
+                    <p class="list-group-item-text text-muted">Clusters of physical hosts in which VMs reside</p>
+                </div>
+                <div class="list-group-item">
+                    <span class="badge pull-right">{{ stats.virtualmachine_count }}</span>
+                    <h4 class="list-group-item-heading"><a href="{% url 'virtualization:virtualmachine_list' %}">Virtual Machines</a></h4>
+                    <p class="list-group-item-text text-muted">Virtual compute instances running inside clusters</p>
+                </div>
+            </div>
+        </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-sm-6 col-md-4">
         <div class="panel panel-default">
             <div class="panel-heading">
                 <strong>IPAM</strong>
@@ -156,8 +115,6 @@
                 </div>
             </div>
         </div>
-    </div>
-    <div class="col-md-4">
         {% if perms.secrets %}
             <div class="panel panel-default">
                 <div class="panel-heading">
@@ -172,6 +129,27 @@
                 </div>
             </div>
         {% endif %}
+    </div>
+    <div class="col-sm-6 col-md-4">
+        <div class="panel panel-default">
+            <div class="panel-heading">
+                <strong>Global Topology Maps</strong>
+            </div>
+            {% if topology_maps %}
+                <table class="table table-hover panel-body">
+                    {% for tm in topology_maps %}
+                        <tr>
+                            <td><i class="fa fa-fw fa-map-o"></i> <a href="{% url 'extras-api:topologymap-render' pk=tm.pk %}" target="_blank">{{ tm }}</a></td>
+                            <td>{{ tm.description }}</td>
+                        </tr>
+                    {% endfor %}
+                </table>
+            {% else %}
+                <div class="panel-body text-muted">
+                    None
+                </div>
+            {% endif %}
+        </div>
         <div class="panel panel-default">
             <div class="panel-heading">
                 <strong>Recent Activity</strong>

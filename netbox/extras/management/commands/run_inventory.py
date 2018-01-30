@@ -1,18 +1,20 @@
+from __future__ import unicode_literals
+
 from getpass import getpass
-from ncclient.transport.errors import AuthenticationError
-from paramiko import AuthenticationException
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from ncclient.transport.errors import AuthenticationError
+from paramiko import AuthenticationException
 
-from dcim.models import Device, Module, Site
+from dcim.models import Device, InventoryItem, Site, STATUS_ACTIVE
 
 
 class Command(BaseCommand):
     help = "Update inventory information for specified devices"
-    username = settings.NETBOX_USERNAME
-    password = settings.NETBOX_PASSWORD
+    username = settings.NAPALM_USERNAME
+    password = settings.NAPALM_PASSWORD
 
     def add_arguments(self, parser):
         parser.add_argument('-u', '--username', dest='username', help="Specify the username to use")
@@ -25,12 +27,12 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
 
-        def create_modules(modules, parent=None):
-            for module in modules:
-                m = Module(device=device, parent=parent, name=module['name'], part_id=module['part_id'],
-                           serial=module['serial'], discovered=True)
-                m.save()
-                create_modules(module.get('modules', []), parent=m)
+        def create_inventory_items(inventory_items, parent=None):
+            for item in inventory_items:
+                i = InventoryItem(device=device, parent=parent, name=item['name'], part_id=item['part_id'],
+                                  serial=item['serial'], discovered=True)
+                i.save()
+                create_inventory_items(item.get('items', []), parent=i)
 
         # Credentials
         if options['username']:
@@ -39,7 +41,7 @@ class Command(BaseCommand):
             self.password = getpass("Password: ")
 
         # Attempt to inventory only active devices
-        device_list = Device.objects.filter(status=True)
+        device_list = Device.objects.filter(status=STATUS_ACTIVE)
 
         # --site: Include only devices belonging to specified site(s)
         if options['site']:
@@ -49,7 +51,7 @@ class Command(BaseCommand):
                 self.stdout.write("Running inventory for these sites: {}".format(', '.join(site_names)))
             else:
                 raise CommandError("One or more sites specified but none found.")
-            device_list = device_list.filter(rack__site__in=sites)
+            device_list = device_list.filter(site__in=sites)
 
         # --name: Filter devices by name matching a regex
         if options['name']:
@@ -72,7 +74,7 @@ class Command(BaseCommand):
 
             # Skip inactive devices
             if not device.status:
-                self.stdout.write("Skipped (inactive)")
+                self.stdout.write("Skipped (not active)")
                 continue
 
             # Skip devices without primary_ip set
@@ -107,9 +109,9 @@ class Command(BaseCommand):
                 self.stdout.write("")
                 self.stdout.write("\tSerial: {}".format(inventory['chassis']['serial']))
                 self.stdout.write("\tDescription: {}".format(inventory['chassis']['description']))
-                for module in inventory['modules']:
-                    self.stdout.write("\tModule: {} / {} ({})".format(module['name'], module['part_id'],
-                                                                      module['serial']))
+                for item in inventory['items']:
+                    self.stdout.write("\tItem: {} / {} ({})".format(item['name'], item['part_id'],
+                                                                    item['serial']))
             else:
                 self.stdout.write("{} ({})".format(inventory['chassis']['description'], inventory['chassis']['serial']))
 
@@ -119,7 +121,7 @@ class Command(BaseCommand):
                     if device.serial != inventory['chassis']['serial']:
                         device.serial = inventory['chassis']['serial']
                         device.save()
-                    Module.objects.filter(device=device, discovered=True).delete()
-                    create_modules(inventory.get('modules', []))
+                    InventoryItem.objects.filter(device=device, discovered=True).delete()
+                    create_inventory_items(inventory.get('items', []))
 
         self.stdout.write("Finished!")
