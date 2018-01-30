@@ -1,10 +1,11 @@
+from __future__ import unicode_literals
+
 import django_tables2 as tables
+from django.utils.safestring import mark_safe
 from django_tables2.utils import Accessor
 
 from utilities.tables import BaseTable, ToggleColumn
-
 from .models import Circuit, CircuitType, Provider
-
 
 CIRCUITTYPE_ACTIONS = """
 {% if perms.circuit.change_circuittype %}
@@ -13,18 +14,38 @@ CIRCUITTYPE_ACTIONS = """
 """
 
 
+class CircuitTerminationColumn(tables.Column):
+
+    def render(self, value):
+        if value.interface:
+            return mark_safe('<a href="{}" title="{}">{}</a>'.format(
+                value.interface.device.get_absolute_url(),
+                value.site,
+                value.interface.device
+            ))
+        return mark_safe('<a href="{}">{}</a>'.format(
+            value.site.get_absolute_url(),
+            value.site
+        ))
+
+
 #
 # Providers
 #
 
 class ProviderTable(BaseTable):
     pk = ToggleColumn()
-    name = tables.LinkColumn('circuits:provider', args=[Accessor('slug')], verbose_name='Name')
-    asn = tables.Column(verbose_name='ASN')
-    account = tables.Column(verbose_name='Account')
-    circuit_count = tables.Column(accessor=Accessor('count_circuits'), verbose_name='Circuits')
+    name = tables.LinkColumn()
 
     class Meta(BaseTable.Meta):
+        model = Provider
+        fields = ('pk', 'name', 'asn', 'account',)
+
+
+class ProviderDetailTable(ProviderTable):
+    circuit_count = tables.Column(accessor=Accessor('count_circuits'), verbose_name='Circuits')
+
+    class Meta(ProviderTable.Meta):
         model = Provider
         fields = ('pk', 'name', 'asn', 'account', 'circuit_count')
 
@@ -35,11 +56,11 @@ class ProviderTable(BaseTable):
 
 class CircuitTypeTable(BaseTable):
     pk = ToggleColumn()
-    name = tables.LinkColumn(verbose_name='Name')
+    name = tables.LinkColumn()
     circuit_count = tables.Column(verbose_name='Circuits')
-    slug = tables.Column(verbose_name='Slug')
-    actions = tables.TemplateColumn(template_code=CIRCUITTYPE_ACTIONS, attrs={'td': {'class': 'text-right'}},
-                                    verbose_name='')
+    actions = tables.TemplateColumn(
+        template_code=CIRCUITTYPE_ACTIONS, attrs={'td': {'class': 'text-right'}}, verbose_name=''
+    )
 
     class Meta(BaseTable.Meta):
         model = CircuitType
@@ -52,16 +73,12 @@ class CircuitTypeTable(BaseTable):
 
 class CircuitTable(BaseTable):
     pk = ToggleColumn()
-    cid = tables.LinkColumn('circuits:circuit', args=[Accessor('pk')], verbose_name='ID')
-    type = tables.Column(verbose_name='Type')
-    provider = tables.LinkColumn('circuits:provider', args=[Accessor('provider.slug')], verbose_name='Provider')
-    tenant = tables.LinkColumn('tenancy:tenant', args=[Accessor('tenant.slug')], verbose_name='Tenant')
-    site = tables.LinkColumn('dcim:site', args=[Accessor('site.slug')], verbose_name='Site')
-    port_speed = tables.Column(accessor=Accessor('port_speed_human'), order_by=Accessor('port_speed'),
-                               verbose_name='Port Speed')
-    commit_rate = tables.Column(accessor=Accessor('commit_rate_human'), order_by=Accessor('commit_rate'),
-                                verbose_name='Commit Rate')
+    cid = tables.LinkColumn(verbose_name='ID')
+    provider = tables.LinkColumn('circuits:provider', args=[Accessor('provider.slug')])
+    tenant = tables.LinkColumn('tenancy:tenant', args=[Accessor('tenant.slug')])
+    termination_a = CircuitTerminationColumn(orderable=False, verbose_name='A Side')
+    termination_z = CircuitTerminationColumn(orderable=False, verbose_name='Z Side')
 
     class Meta(BaseTable.Meta):
         model = Circuit
-        fields = ('pk', 'cid', 'type', 'provider', 'tenant', 'site', 'port_speed', 'commit_rate')
+        fields = ('pk', 'cid', 'type', 'provider', 'tenant', 'termination_a', 'termination_z', 'description')

@@ -1,115 +1,210 @@
-import graphviz
-from rest_framework import generics
-from rest_framework.views import APIView
+from __future__ import unicode_literals
 
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import Q
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
+from rest_framework.decorators import detail_route
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.response import Response
+from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet, ViewSet
 
-from circuits.models import Provider
-from dcim.models import Site, Device, Interface, InterfaceConnection
-from extras.models import Graph, TopologyMap, GRAPH_TYPE_INTERFACE, GRAPH_TYPE_PROVIDER, GRAPH_TYPE_SITE
+from extras import filters
+from extras.models import CustomField, ExportTemplate, Graph, ImageAttachment, ReportResult, TopologyMap, UserAction
+from extras.reports import get_report, get_reports
+from utilities.api import FieldChoicesViewSet, IsAuthenticatedOrLoginNotRequired, WritableSerializerMixin
+from . import serializers
 
-from .serializers import GraphSerializer
+
+#
+# Field choices
+#
+
+class ExtrasFieldChoicesViewSet(FieldChoicesViewSet):
+    fields = (
+        (CustomField, ['type']),
+        (Graph, ['type']),
+    )
 
 
-class CustomFieldModelAPIView(object):
+#
+# Custom fields
+#
+
+class CustomFieldModelViewSet(ModelViewSet):
     """
-    Include the applicable set of CustomField in the view context.
+    Include the applicable set of CustomFields in the ModelViewSet context.
     """
 
-    def __init__(self):
-        super(CustomFieldModelAPIView, self).__init__()
-        self.content_type = ContentType.objects.get_for_model(self.queryset.model)
-        self.custom_fields = self.content_type.custom_fields.prefetch_related('choices')
+    def get_serializer_context(self):
+
+        # Gather all custom fields for the model
+        content_type = ContentType.objects.get_for_model(self.queryset.model)
+        custom_fields = content_type.custom_fields.prefetch_related('choices')
 
         # Cache all relevant CustomFieldChoices. This saves us from having to do a lookup per select field per object.
         custom_field_choices = {}
-        for field in self.custom_fields:
+        for field in custom_fields:
             for cfc in field.choices.all():
                 custom_field_choices[cfc.id] = cfc.value
-        self.custom_field_choices = custom_field_choices
+        custom_field_choices = custom_field_choices
 
-
-class GraphListView(generics.ListAPIView):
-    """
-    Returns a list of relevant graphs
-    """
-    serializer_class = GraphSerializer
-
-    def get_serializer_context(self):
-        cls = {
-            GRAPH_TYPE_INTERFACE: Interface,
-            GRAPH_TYPE_PROVIDER: Provider,
-            GRAPH_TYPE_SITE: Site,
-        }
-        context = super(GraphListView, self).get_serializer_context()
-        context.update({'graphed_object': get_object_or_404(cls[self.kwargs.get('type')], pk=self.kwargs['pk'])})
+        context = super(CustomFieldModelViewSet, self).get_serializer_context()
+        context.update({
+            'custom_fields': custom_fields,
+            'custom_field_choices': custom_field_choices,
+        })
         return context
 
     def get_queryset(self):
-        graph_type = self.kwargs.get('type', None)
-        if not graph_type:
-            raise Http404()
-        queryset = Graph.objects.filter(type=graph_type)
-        return queryset
+        # Prefetch custom field values
+        return super(CustomFieldModelViewSet, self).get_queryset().prefetch_related('custom_field_values__field')
 
 
-class TopologyMapView(APIView):
-    """
-    Generate a topology diagram
-    """
+#
+# Graphs
+#
 
-    def get(self, request, slug):
+class GraphViewSet(WritableSerializerMixin, ModelViewSet):
+    queryset = Graph.objects.all()
+    serializer_class = serializers.GraphSerializer
+    write_serializer_class = serializers.WritableGraphSerializer
+    filter_class = filters.GraphFilter
 
-        tmap = get_object_or_404(TopologyMap, slug=slug)
 
-        # Construct the graph
-        graph = graphviz.Graph()
-        graph.graph_attr['ranksep'] = '1'
-        for i, device_set in enumerate(tmap.device_sets):
+#
+# Export templates
+#
 
-            subgraph = graphviz.Graph(name='sg{}'.format(i))
-            subgraph.graph_attr['rank'] = 'same'
+class ExportTemplateViewSet(WritableSerializerMixin, ModelViewSet):
+    queryset = ExportTemplate.objects.all()
+    serializer_class = serializers.ExportTemplateSerializer
+    filter_class = filters.ExportTemplateFilter
 
-            # Add a pseudonode for each device_set to enforce hierarchical layout
-            subgraph.node('set{}'.format(i), label='', shape='none', width='0')
-            if i:
-                graph.edge('set{}'.format(i - 1), 'set{}'.format(i), style='invis')
 
-            # Add each device to the graph
-            devices = []
-            for query in device_set.split(';'):  # Split regexes on semicolons
-                devices += Device.objects.filter(name__regex=query)
-            for d in devices:
-                subgraph.node(d.name)
+#
+# Topology maps
+#
 
-            # Add an invisible connection to each successive device in a set to enforce horizontal order
-            for j in range(0, len(devices) - 1):
-                subgraph.edge(devices[j].name, devices[j + 1].name, style='invis')
+class TopologyMapViewSet(WritableSerializerMixin, ModelViewSet):
+    queryset = TopologyMap.objects.select_related('site')
+    serializer_class = serializers.TopologyMapSerializer
+    write_serializer_class = serializers.WritableTopologyMapSerializer
+    filter_class = filters.TopologyMapFilter
 
-            graph.subgraph(subgraph)
+    @detail_route()
+    def render(self, request, pk):
 
-        # Compile list of all devices
-        device_superset = Q()
-        for device_set in tmap.device_sets:
-            for query in device_set.split(';'):  # Split regexes on semicolons
-                device_superset = device_superset | Q(name__regex=query)
+        tmap = get_object_or_404(TopologyMap, pk=pk)
+        img_format = 'png'
 
-        # Add all connections to the graph
-        devices = Device.objects.filter(*(device_superset,))
-        connections = InterfaceConnection.objects.filter(interface_a__device__in=devices,
-                                                         interface_b__device__in=devices)
-        for c in connections:
-            graph.edge(c.interface_a.device.name, c.interface_b.device.name)
-
-        # Get the image data and return
         try:
-            topo_data = graph.pipe(format='png')
+            data = tmap.render(img_format=img_format)
         except:
-            return HttpResponse("There was an error generating the requested graph. Ensure that the GraphViz "
-                                "executables have been installed correctly.")
-        response = HttpResponse(topo_data, content_type='image/png')
+            return HttpResponse(
+                "There was an error generating the requested graph. Ensure that the GraphViz executables have been "
+                "installed correctly."
+            )
+
+        response = HttpResponse(data, content_type='image/{}'.format(img_format))
+        response['Content-Disposition'] = 'inline; filename="{}.{}"'.format(tmap.slug, img_format)
 
         return response
+
+
+#
+# Image attachments
+#
+
+class ImageAttachmentViewSet(WritableSerializerMixin, ModelViewSet):
+    queryset = ImageAttachment.objects.all()
+    serializer_class = serializers.ImageAttachmentSerializer
+    write_serializer_class = serializers.WritableImageAttachmentSerializer
+
+
+#
+# Reports
+#
+
+class ReportViewSet(ViewSet):
+    permission_classes = [IsAuthenticatedOrLoginNotRequired]
+    _ignore_model_permissions = True
+    exclude_from_schema = True
+    lookup_value_regex = '[^/]+'  # Allow dots
+
+    def _retrieve_report(self, pk):
+
+        # Read the PK as "<module>.<report>"
+        if '.' not in pk:
+            raise Http404
+        module_name, report_name = pk.split('.', 1)
+
+        # Raise a 404 on an invalid Report module/name
+        report = get_report(module_name, report_name)
+        if report is None:
+            raise Http404
+
+        return report
+
+    def list(self, request):
+        """
+        Compile all reports and their related results (if any). Result data is deferred in the list view.
+        """
+        report_list = []
+
+        # Iterate through all available Reports.
+        for module_name, reports in get_reports():
+            for report in reports:
+
+                # Attach the relevant ReportResult (if any) to each Report.
+                report.result = ReportResult.objects.filter(report=report.full_name).defer('data').first()
+                report_list.append(report)
+
+        serializer = serializers.ReportSerializer(report_list, many=True, context={
+            'request': request,
+        })
+
+        return Response(serializer.data)
+
+    def retrieve(self, request, pk):
+        """
+        Retrieve a single Report identified as "<module>.<report>".
+        """
+
+        # Retrieve the Report and ReportResult, if any.
+        report = self._retrieve_report(pk)
+        report.result = ReportResult.objects.filter(report=report.full_name).first()
+
+        serializer = serializers.ReportDetailSerializer(report)
+
+        return Response(serializer.data)
+
+    @detail_route(methods=['post'])
+    def run(self, request, pk):
+        """
+        Run a Report and create a new ReportResult, overwriting any previous result for the Report.
+        """
+
+        # Check that the user has permission to run reports.
+        if not request.user.has_perm('extras.add_reportresult'):
+            raise PermissionDenied("This user does not have permission to run reports.")
+
+        # Retrieve and run the Report. This will create a new ReportResult.
+        report = self._retrieve_report(pk)
+        report.run()
+
+        serializer = serializers.ReportDetailSerializer(report)
+
+        return Response(serializer.data)
+
+
+#
+# User activity
+#
+
+class RecentActivityViewSet(ReadOnlyModelViewSet):
+    """
+    List all UserActions to provide a log of recent activity.
+    """
+    queryset = UserAction.objects.all()
+    serializer_class = serializers.UserActionSerializer
+    filter_class = filters.UserActionFilter

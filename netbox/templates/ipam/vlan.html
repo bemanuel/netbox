@@ -1,21 +1,20 @@
 {% extends '_base.html' %}
-{% load render_table from django_tables2 %}
-
-{% block title %}VLAN {{ vlan.display_name }}{% endblock %}
 
 {% block content %}
 <div class="row">
-    <div class="col-md-9">
+    <div class="col-sm-8 col-md-9">
         <ol class="breadcrumb">
             <li><a href="{% url 'ipam:vlan_list' %}">VLANs</a></li>
-            <li><a href="{% url 'ipam:vlan_list' %}?site={{ vlan.site.slug }}">{{ vlan.site }}</a></li>
-            {% if vlan.group %}
-                <li><a href="{% url 'ipam:vlan_list' %}?site={{ vlan.site.slug }}&group={{ vlan.group.slug }}">{{ vlan.group.name }}</a></li>
+            {% if vlan.site %}
+                <li><a href="{% url 'ipam:vlan_list' %}?site={{ vlan.site.slug }}">{{ vlan.site }}</a></li>
             {% endif %}
-            <li>{{ vlan.name }} ({{ vlan.vid }})</li>
+            {% if vlan.group %}
+                <li><a href="{% url 'ipam:vlan_list' %}?group={{ vlan.group.slug }}">{{ vlan.group }}</a></li>
+            {% endif %}
+            <li>{{ vlan }}</li>
         </ol>
     </div>
-    <div class="col-md-3">
+    <div class="col-sm-4 col-md-3">
     <form action="{% url 'ipam:vlan_list' %}" method="get">
         <div class="input-group">
             <input type="text" name="q" class="form-control" placeholder="Search VLANs" />
@@ -42,23 +41,34 @@
         </a>
     {% endif %}
 </div>
-<h1>VLAN {{ vlan.display_name }}</h1>
+<h1>{% block title %}VLAN {{ vlan.display_name }}{% endblock %}</h1>
+{% include 'inc/created_updated.html' with obj=vlan %}
 <div class="row">
 	<div class="col-md-6">
         <div class="panel panel-default">
             <div class="panel-heading">
                 <strong>VLAN</strong>
             </div>
-            <table class="table table-hover panel-body">
+            <table class="table table-hover panel-body attr-table">
                 <tr>
                     <td>Site</td>
-                    <td><a href="{% url 'dcim:site' slug=vlan.site.slug %}">{{ vlan.site }}</a></td>
+                    <td>
+                        {% if vlan.site %}
+                            {% if vlan.site.region %}
+                                <a href="{{ vlan.site.region.get_absolute_url }}">{{ vlan.site.region }}</a>
+                                <i class="fa fa-angle-right"></i>
+                            {% endif %}
+                            <a href="{% url 'dcim:site' slug=vlan.site.slug %}">{{ vlan.site }}</a>
+                        {% else %}
+                            <span class="text-muted">None</span>
+                        {% endif %}
+                    </td>
                 </tr>
                 <tr>
                     <td>Group</td>
                     <td>
                         {% if vlan.group %}
-                            <a href="{{ vlan.group.get_absolute_url }}">{{ vlan.group.name }}</a>
+                            <a href="{{ vlan.group.get_absolute_url }}">{{ vlan.group }}</a>
                         {% else %}
                             <span class="text-muted">None</span>
                         {% endif %}
@@ -76,6 +86,10 @@
                     <td>Tenant</td>
                     <td>
                         {% if vlan.tenant %}
+                            {% if vlan.tenant.group %}
+                                <a href="{{ vlan.tenant.group.get_absolute_url }}">{{ vlan.tenant.group }}</a>
+                                <i class="fa fa-angle-right"></i>
+                            {% endif %}
                             <a href="{{ vlan.tenant.get_absolute_url }}">{{ vlan.tenant }}</a>
                         {% else %}
                             <span class="text-muted">None</span>
@@ -92,7 +106,7 @@
                     <td>Role</td>
                     <td>
                         {% if vlan.role %}
-                            <span>{{ vlan.role }}</span>
+                            <a href="{% url 'ipam:vlan_list' %}?role={{ vlan.role.slug }}">{{ vlan.role }}</a>
                         {% else %}
                             <span class="text-muted">None</span>
                         {% endif %}
@@ -113,14 +127,13 @@
         {% with vlan.get_custom_fields as custom_fields %}
             {% include 'inc/custom_fields_panel.html' %}
         {% endwith %}
-        {% include 'inc/created_updated.html' with obj=vlan %}
 	</div>
 	<div class="col-md-6">
         <div class="panel panel-default">
             <div class="panel-heading">
                 <strong>Prefixes</strong>
             </div>
-            {% render_table prefix_table %}
+            {% include 'responsive_table.html' with table=prefix_table %}
             {% if perms.ipam.add_prefix %}
                 <div class="panel-footer text-right">
                     <a href="{% url 'ipam:prefix_add' %}?{% if vlan.tenant %}tenant={{ vlan.tenant.pk }}&{% endif %}site={{ vlan.site.pk }}&vlan={{ vlan.pk }}" class="btn btn-primary btn-xs">

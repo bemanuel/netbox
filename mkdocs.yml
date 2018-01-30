@@ -8,7 +8,7 @@ pages:
         - 'Web Server': 'installation/web-server.md'
         - 'LDAP (Optional)': 'installation/ldap.md'
         - 'Upgrading': 'installation/upgrading.md'
-        - 'Alternate Install: Docker': 'installation/docker.md'
+        - 'Migrating to Python3': 'installation/migrating-to-python3.md'
     - 'Configuration':
         - 'Mandatory Settings': 'configuration/mandatory-settings.md'
         - 'Optional Settings': 'configuration/optional-settings.md'
@@ -18,8 +18,18 @@ pages:
         - 'IPAM': 'data-model/ipam.md'
         - 'Secrets': 'data-model/secrets.md'
         - 'Tenancy': 'data-model/tenancy.md'
+        - 'Virtualization': 'data-model/virtualization.md'
         - 'Extras': 'data-model/extras.md'
-    - 'API Integration': 'api-integration.md'
+    - 'API':
+        - 'Overview': 'api/overview.md'
+        - 'Authentication': 'api/authentication.md'
+        - 'Working with Secrets': 'api/working-with-secrets.md'
+        - 'Examples': 'api/examples.md'
+    - 'Miscellaneous':
+        - 'Reports': 'miscellaneous/reports.md'
+        - 'Shell': 'miscellaneous/shell.md'
+    - 'Development':
+        - 'Utility Views': 'development/utility-views.md'
 
 markdown_extensions:
     - admonition:

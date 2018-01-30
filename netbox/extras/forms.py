@@ -1,12 +1,13 @@
+from __future__ import unicode_literals
+
 from collections import OrderedDict
 
 from django import forms
 from django.contrib.contenttypes.models import ContentType
 
-from utilities.forms import BulkEditForm, LaxURLField
-from .models import (
-    CF_TYPE_BOOLEAN, CF_TYPE_DATE, CF_TYPE_INTEGER, CF_TYPE_SELECT, CF_TYPE_URL, CustomField, CustomFieldValue
-)
+from utilities.forms import BootstrapMixin, BulkEditForm, LaxURLField
+from .constants import CF_TYPE_BOOLEAN, CF_TYPE_DATE, CF_TYPE_INTEGER, CF_TYPE_SELECT, CF_TYPE_URL
+from .models import CustomField, CustomFieldValue, ImageAttachment
 
 
 def get_custom_fields_for_model(content_type, filterable_only=False, bulk_edit=False):
@@ -34,9 +35,9 @@ def get_custom_fields_for_model(content_type, filterable_only=False, bulk_edit=F
                 (0, 'False'),
             )
             if cf.default.lower() in ['true', 'yes', '1']:
-                initial = True
+                initial = 1
             elif cf.default.lower() in ['false', 'no', '0']:
-                initial = False
+                initial = 0
             else:
                 initial = None
             field = forms.NullBooleanField(required=cf.required, initial=initial,
@@ -44,12 +45,12 @@ def get_custom_fields_for_model(content_type, filterable_only=False, bulk_edit=F
 
         # Date
         elif cf.type == CF_TYPE_DATE:
-            field = forms.DateField(required=cf.required, initial=cf.default)
+            field = forms.DateField(required=cf.required, initial=cf.default, help_text="Date format: YYYY-MM-DD")
 
         # Select
         elif cf.type == CF_TYPE_SELECT:
             choices = [(cfc.pk, cfc) for cfc in cf.choices.all()]
-            if bulk_edit or filterable_only:
+            if not cf.required or bulk_edit or filterable_only:
                 choices = [(None, '---------')] + choices
             field = forms.TypedChoiceField(choices=choices, coerce=int, required=cf.required)
 
@@ -63,7 +64,8 @@ def get_custom_fields_for_model(content_type, filterable_only=False, bulk_edit=F
 
         field.model = cf
         field.label = cf.label if cf.label else cf.name.replace('_', ' ').capitalize()
-        field.help_text = cf.description
+        if cf.description:
+            field.help_text = cf.description
 
         field_dict[field_name] = field
 
@@ -102,7 +104,7 @@ class CustomFieldForm(forms.ModelForm):
                                                                            obj_id=self.instance.pk)
             except CustomFieldValue.DoesNotExist:
                 # Skip this field if none exists already and its value is empty
-                if self.cleaned_data[field_name] in [None, u'']:
+                if self.cleaned_data[field_name] in [None, '']:
                     continue
                 cfv = CustomFieldValue(
                     field=self.fields[field_name].model,
@@ -157,3 +159,10 @@ class CustomFieldFilterForm(forms.Form):
         for name, field in custom_fields:
             field.required = False
             self.fields[name] = field
+
+
+class ImageAttachmentForm(BootstrapMixin, forms.ModelForm):
+
+    class Meta:
+        model = ImageAttachment
+        fields = ['name', 'image']

@@ -1,20 +1,17 @@
 {% extends '_base.html' %}
-{% load render_table from django_tables2 %}
-
-{% block title %}{{ ipaddress }}{% endblock %}
 
 {% block content %}
 <div class="row">
-    <div class="col-md-9">
+    <div class="col-sm-8 col-md-9">
         <ol class="breadcrumb">
             <li><a href="{% url 'ipam:ipaddress_list' %}">IP Addresses</a></li>
             {% if ipaddress.vrf %}
-                <li><a href="{% url 'ipam:ipaddress_list' %}?vrf={{ ipaddress.vrf.pk }}">{{ ipaddress.vrf }}</a></li>
+                <li><a href="{% url 'ipam:vrf' pk=ipaddress.vrf.pk %}">{{ ipaddress.vrf }}</a></li>
             {% endif %}
             <li>{{ ipaddress }}</li>
         </ol>
     </div>
-    <div class="col-md-3">
+    <div class="col-sm-4 col-md-3">
         <form action="{% url 'ipam:ipaddress_list' %}" method="get">
             <div class="input-group">
                 <input type="text" name="q" class="form-control" placeholder="Search IPs" />
@@ -41,14 +38,15 @@
         </a>
     {% endif %}
 </div>
-<h1>{{ ipaddress }}</h1>
+<h1>{% block title %}{{ ipaddress }}{% endblock %}</h1>
+{% include 'inc/created_updated.html' with obj=ipaddress %}
 <div class="row">
-	<div class="col-md-6">
+	<div class="col-md-4">
         <div class="panel panel-default">
             <div class="panel-heading">
                 <strong>IP Address</strong>
             </div>
-            <table class="table table-hover panel-body">
+            <table class="table table-hover panel-body attr-table">
                 <tr>
                     <td>Family</td>
                     <td>{{ ipaddress.get_family_display }}</td>
@@ -83,6 +81,16 @@
                     </td>
                 </tr>
                 <tr>
+                    <td>Role</td>
+                    <td>
+                        {% if ipaddress.role %}
+                            <a href="{% url 'ipam:ipaddress_list' %}?role={{ ipaddress.role }}">{{ ipaddress.get_role_display }}</a>
+                        {% else %}
+                            <span class="text-muted">None</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                <tr>
                     <td>Description</td>
                     <td>
                         {% if ipaddress.description %}
@@ -96,15 +104,9 @@
                     <td>Assignment</td>
                     <td>
                         {% if ipaddress.interface %}
-                            <span><a href="{% url 'dcim:device' pk=ipaddress.interface.device.pk %}">{{ ipaddress.interface.device }}</a> ({{ ipaddress.interface }})</span>
-                            {% if perms.dcim.change_device and perms.ipam.change_ipaddress %}
-                                <a href="{% url 'ipam:ipaddress_remove' pk=ipaddress.pk %}" class="btn btn-xs btn-danger"><i class="glyphicon glyphicon-remove"></i> Remove</a>
-                            {% endif %}
+                            <span><a href="{{ ipaddress.interface.parent.get_absolute_url }}">{{ ipaddress.interface.parent }}</a> ({{ ipaddress.interface }})</span>
                         {% else %}
                             <span class="text-muted">None</span>
-                            {% if perms.dcim.change_device and perms.ipam.change_ipaddress %}
-                                <a href="{% url 'ipam:ipaddress_assign' pk=ipaddress.pk %}" class="btn btn-xs btn-primary"><i class="glyphicon glyphicon-plus"></i> Assign</a>
-                            {% endif %}
                         {% endif %}
                     </td>
                 </tr>
@@ -114,7 +116,7 @@
                         {% if ipaddress.nat_inside %}
                             <a href="{% url 'ipam:ipaddress' pk=ipaddress.nat_inside.pk %}">{{ ipaddress.nat_inside }}</a>
                             {% if ipaddress.nat_inside.interface %}
-                                (<a href="{% url 'dcim:device' pk=ipaddress.nat_inside.interface.device.pk %}">{{ ipaddress.nat_inside.interface.device }}</a>)
+                                (<a href="{{ ipaddress.nat_inside.interface.parent.get_absolute_url }}">{{ ipaddress.nat_inside.interface.parent }}</a>)
                             {% endif %}
                         {% else %}
                             <span class="text-muted">None</span>
@@ -136,20 +138,13 @@
         {% with ipaddress.get_custom_fields as custom_fields %}
             {% include 'inc/custom_fields_panel.html' %}
         {% endwith %}
-        {% include 'inc/created_updated.html' with obj=ipaddress %}
 	</div>
-	<div class="col-md-6">
-        {% with heading='Parent Prefixes' %}
-            {% render_table parent_prefixes_table 'panel_table.html' %}
-        {% endwith %}
+	<div class="col-md-8">
+        {% include 'panel_table.html' with table=parent_prefixes_table heading='Parent Prefixes' %}
         {% if duplicate_ips_table.rows %}
-            {% with heading='Duplicate IP Addresses' panel_class='danger' %}
-                {% render_table duplicate_ips_table 'panel_table.html' %}
-            {% endwith %}
+            {% include 'panel_table.html' with table=duplicate_ips_table heading='Duplicate IP Addresses' panel_class='danger' %}
         {% endif %}
-        {% with heading='Related IP Addresses' %}
-            {% render_table related_ips_table 'panel_table.html' %}
-        {% endwith %}
+        {% include 'panel_table.html' with table=related_ips_table heading='Related IP Addresses' %}
 	</div>
 </div>
 {% endblock %}

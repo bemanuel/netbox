@@ -1,5 +1,4 @@
-This guide explains how to implement LDAP authentication using an external server. User authentication will fall back to
-built-in Django users in the event of a failure.
+This guide explains how to implement LDAP authentication using an external server. User authentication will fall back to built-in Django users in the event of a failure.
 
 # Requirements
 
@@ -7,27 +6,30 @@ built-in Django users in the event of a failure.
 
 On Ubuntu:
 
-```
+```no-highlight
 sudo apt-get install -y python-dev libldap2-dev libsasl2-dev libssl-dev
 ```
 
 On CentOS:
 
-```
+```no-highlight
 sudo yum install -y python-devel openldap-devel
 ```
 
 ## Install django-auth-ldap
 
-```
+```no-highlight
 sudo pip install django-auth-ldap
 ```
 
 # Configuration
 
-Create a file in the same directory as `configuration.py` (typically `netbox/netbox/`) named `ldap_config.py`. Define all of the parameters required below in `ldap_config.py`.
+Create a file in the same directory as `configuration.py` (typically `netbox/netbox/`) named `ldap_config.py`. Define all of the parameters required below in `ldap_config.py`. Complete documentation of all `django-auth-ldap` configuration options is included in the project's [official documentation](http://django-auth-ldap.readthedocs.io/).
 
 ## General Server Configuration
+
+!!! info
+    When using Windows Server 2012 you may need to specify a port on `AUTH_LDAP_SERVER_URI`. Use `3269` for secure, or `3268` for non-secure.
 
 ```python
 import ldap
@@ -50,7 +52,12 @@ AUTH_LDAP_BIND_PASSWORD = "demo"
 LDAP_IGNORE_CERT_ERRORS = True
 ```
 
+STARTTLS can be configured by setting `AUTH_LDAP_START_TLS = True` and using the `ldap://` URI scheme.
+
 ## User Authentication
+
+!!! info
+    When using Windows Server 2012, `AUTH_LDAP_USER_DN_TEMPLATE` should be set to None.
 
 ```python
 from django_auth_ldap.config import LDAPSearch
@@ -67,11 +74,14 @@ AUTH_LDAP_USER_DN_TEMPLATE = "uid=%(user)s,ou=users,dc=example,dc=com"
 # You can map user attributes to Django attributes as so.
 AUTH_LDAP_USER_ATTR_MAP = {
     "first_name": "givenName",
-    "last_name": "sn"
+    "last_name": "sn",
+    "email": "mail"
 }
 ```
 
 # User Groups for Permissions
+!!! info
+    When using Microsoft Active Directory, Support for nested Groups can be activated by using `GroupOfNamesType()` instead of `NestedGroupOfNamesType()` for `AUTH_LDAP_GROUP_TYPE`.
 
 ```python
 from django_auth_ldap.config import LDAPSearch, GroupOfNamesType
@@ -99,3 +109,7 @@ AUTH_LDAP_FIND_GROUP_PERMS = True
 AUTH_LDAP_CACHE_GROUPS = True
 AUTH_LDAP_GROUP_CACHE_TIMEOUT = 3600
 ```
+
+* `is_active` - All users must be mapped to at least this group to enable authentication. Without this, users cannot log in.
+* `is_staff` - Users mapped to this group are enabled for access to the administration tools; this is the equivalent of checking the "staff status" box on a manually created user. This doesn't grant any specific permissions.
+* `is_superuser` - Users mapped to this group will be granted superuser status. Superusers are implicitly granted all permissions.

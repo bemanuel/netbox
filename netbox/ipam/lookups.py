@@ -1,5 +1,7 @@
-from django.db.models import Lookup
-from django.db.models.lookups import BuiltinLookup
+from __future__ import unicode_literals
+
+from django.db.models import Lookup, Transform, IntegerField
+from django.db.models import lookups
 
 
 class NetFieldDecoratorMixin(object):
@@ -11,28 +13,40 @@ class NetFieldDecoratorMixin(object):
         return lhs_string, lhs_params
 
 
-class EndsWith(NetFieldDecoratorMixin, BuiltinLookup):
-    lookup_name = 'endswith'
+class IExact(NetFieldDecoratorMixin, lookups.IExact):
+
+    def get_rhs_op(self, connection, rhs):
+        return '= LOWER(%s)' % rhs
 
 
-class IEndsWith(NetFieldDecoratorMixin, BuiltinLookup):
-    lookup_name = 'iendswith'
+class EndsWith(NetFieldDecoratorMixin, lookups.EndsWith):
+    pass
 
 
-class StartsWith(NetFieldDecoratorMixin, BuiltinLookup):
+class IEndsWith(NetFieldDecoratorMixin, lookups.IEndsWith):
+    pass
+
+    def get_rhs_op(self, connection, rhs):
+        return 'LIKE LOWER(%s)' % rhs
+
+
+class StartsWith(NetFieldDecoratorMixin, lookups.StartsWith):
     lookup_name = 'startswith'
 
 
-class IStartsWith(NetFieldDecoratorMixin, BuiltinLookup):
-    lookup_name = 'istartswith'
+class IStartsWith(NetFieldDecoratorMixin, lookups.IStartsWith):
+    pass
+
+    def get_rhs_op(self, connection, rhs):
+        return 'LIKE LOWER(%s)' % rhs
 
 
-class Regex(NetFieldDecoratorMixin, BuiltinLookup):
-    lookup_name = 'regex'
+class Regex(NetFieldDecoratorMixin, lookups.Regex):
+    pass
 
 
-class IRegex(NetFieldDecoratorMixin, BuiltinLookup):
-    lookup_name = 'iregex'
+class IRegex(NetFieldDecoratorMixin, lookups.IRegex):
+    pass
 
 
 class NetContainsOrEquals(Lookup):
@@ -87,3 +101,26 @@ class NetHost(Lookup):
             rhs_params[0] = rhs_params[0].split('/')[0]
         params = lhs_params + rhs_params
         return 'HOST(%s) = %s' % (lhs, rhs), params
+
+
+class NetHostContained(Lookup):
+    """
+    Check for the host portion of an IP address without regard to its mask. This allows us to find e.g. 192.0.2.1/24
+    when specifying a parent prefix of 192.0.2.0/26.
+    """
+    lookup_name = 'net_host_contained'
+
+    def as_sql(self, qn, connection):
+        lhs, lhs_params = self.process_lhs(qn, connection)
+        rhs, rhs_params = self.process_rhs(qn, connection)
+        params = lhs_params + rhs_params
+        return 'CAST(HOST(%s) AS INET) << %s' % (lhs, rhs), params
+
+
+class NetMaskLength(Transform):
+    lookup_name = 'net_mask_length'
+    function = 'MASKLEN'
+
+    @property
+    def output_field(self):
+        return IntegerField()

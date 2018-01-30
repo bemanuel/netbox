@@ -1,24 +1,32 @@
-import django_filters
+from __future__ import unicode_literals
 
+import django_filters
 from django.db.models import Q
 
 from extras.filters import CustomFieldFilterSet
-from utilities.filters import NullableModelMultipleChoiceFilter
+from utilities.filters import NumericInFilter
 from .models import Tenant, TenantGroup
 
 
+class TenantGroupFilter(django_filters.FilterSet):
+
+    class Meta:
+        model = TenantGroup
+        fields = ['name', 'slug']
+
+
 class TenantFilter(CustomFieldFilterSet, django_filters.FilterSet):
-    q = django_filters.MethodFilter(
-        action='search',
+    id__in = NumericInFilter(name='id', lookup_expr='in')
+    q = django_filters.CharFilter(
+        method='search',
         label='Search',
     )
-    group_id = NullableModelMultipleChoiceFilter(
-        name='group',
+    group_id = django_filters.ModelMultipleChoiceFilter(
         queryset=TenantGroup.objects.all(),
         label='Group (ID)',
     )
-    group = NullableModelMultipleChoiceFilter(
-        name='group',
+    group = django_filters.ModelMultipleChoiceFilter(
+        name='group__slug',
         queryset=TenantGroup.objects.all(),
         to_field_name='slug',
         label='Group (slug)',
@@ -26,9 +34,11 @@ class TenantFilter(CustomFieldFilterSet, django_filters.FilterSet):
 
     class Meta:
         model = Tenant
-        fields = ['q', 'group_id', 'group', 'name']
+        fields = ['name']
 
-    def search(self, queryset, value):
+    def search(self, queryset, name, value):
+        if not value.strip():
+            return queryset
         return queryset.filter(
             Q(name__icontains=value) |
             Q(description__icontains=value) |
