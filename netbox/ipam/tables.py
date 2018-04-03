@@ -3,6 +3,8 @@ from __future__ import unicode_literals
 import django_tables2 as tables
 from django_tables2.utils import Accessor
 
+from dcim.models import Interface
+from tenancy.tables import COL_TENANT
 from utilities.tables import BaseTable, ToggleColumn
 from .models import Aggregate, IPAddress, Prefix, RIR, Role, VLAN, VLANGroup, VRF
 
@@ -36,6 +38,14 @@ UTILIZATION_GRAPH = """
 {% if record.pk %}{% utilization_graph record.get_utilization %}{% else %}&mdash;{% endif %}
 """
 
+ROLE_PREFIX_COUNT = """
+<a href="{% url 'ipam:prefix_list' %}?role={{ record.slug }}">{{ value }}</a>
+"""
+
+ROLE_VLAN_COUNT = """
+<a href="{% url 'ipam:vlan_list' %}?role={{ record.slug }}">{{ value }}</a>
+"""
+
 ROLE_ACTIONS = """
 {% if perms.ipam.change_role %}
     <a href="{% url 'ipam:role_edit' slug=record.slug %}" class="btn btn-xs btn-warning"><i class="glyphicon glyphicon-pencil" aria-hidden="true"></i></a>
@@ -48,13 +58,7 @@ PREFIX_LINK = """
 {% else %}
     <span class="text-nowrap" style="padding-left: {{ record.depth }}9px">
 {% endif %}
-    <a href="{% if record.pk %}{% url 'ipam:prefix' pk=record.pk %}{% else %}{% url 'ipam:prefix_add' %}?prefix={{ record }}{% if parent.vrf %}&vrf={{ parent.vrf.pk }}{% endif %}{% if parent.site %}&site={{ parent.site.pk }}{% endif %}{% endif %}">{{ record.prefix }}</a>
-</span>
-"""
-
-PREFIX_LINK_BRIEF = """
-<span style="padding-left: {{ record.depth }}0px">
-    <a href="{% if record.pk %}{% url 'ipam:prefix' pk=record.pk %}{% else %}{% url 'ipam:prefix_add' %}?prefix={{ record }}{% if parent.vrf %}&vrf={{ parent.vrf.pk }}{% endif %}{% if parent.site %}&site={{ parent.site.pk }}{% endif %}{% endif %}">{{ record.prefix }}</a>
+    <a href="{% if record.pk %}{% url 'ipam:prefix' pk=record.pk %}{% else %}{% url 'ipam:prefix_add' %}?prefix={{ record }}{% if parent.vrf %}&vrf={{ parent.vrf.pk }}{% endif %}{% if parent.site %}&site={{ parent.site.pk }}{% endif %}{% if parent.tenant %}&tenant_group={{ parent.tenant.group.pk }}&tenant={{ parent.tenant.pk }}{% endif %}{% endif %}">{{ record.prefix }}</a>
 </span>
 """
 
@@ -135,11 +139,23 @@ VLANGROUP_ACTIONS = """
 {% endif %}
 """
 
+VLAN_MEMBER_UNTAGGED = """
+{% if record.untagged_vlan_id == vlan.pk %}
+    <i class="glyphicon glyphicon-ok">
+{% endif %}
+"""
+
+VLAN_MEMBER_ACTIONS = """
+{% if perms.dcim.change_interface %}
+    <a href="{% if record.device %}{% url 'dcim:interface_edit' pk=record.pk %}{% else %}{% url 'virtualization:interface_edit' pk=record.pk %}{% endif %}" class="btn btn-xs btn-warning"><i class="glyphicon glyphicon-pencil"></i></a>
+{% endif %}
+"""
+
 TENANT_LINK = """
 {% if record.tenant %}
-    <a href="{% url 'tenancy:tenant' slug=record.tenant.slug %}">{{ record.tenant }}</a>
+    <a href="{% url 'tenancy:tenant' slug=record.tenant.slug %}" title="{{ record.tenant.description }}">{{ record.tenant }}</a>
 {% elif record.vrf.tenant %}
-    <a href="{% url 'tenancy:tenant' slug=record.vrf.tenant.slug %}">{{ record.vrf.tenant }}</a>*
+    <a href="{% url 'tenancy:tenant' slug=record.vrf.tenant.slug %}" title="{{ record.vrf.tenant.description }}">{{ record.vrf.tenant }}</a>*
 {% else %}
     &mdash;
 {% endif %}
@@ -154,7 +170,7 @@ class VRFTable(BaseTable):
     pk = ToggleColumn()
     name = tables.LinkColumn()
     rd = tables.Column(verbose_name='RD')
-    tenant = tables.LinkColumn('tenancy:tenant', args=[Accessor('tenant.slug')])
+    tenant = tables.TemplateColumn(template_code=COL_TENANT)
 
     class Meta(BaseTable.Meta):
         model = VRF
@@ -225,10 +241,18 @@ class AggregateDetailTable(AggregateTable):
 
 class RoleTable(BaseTable):
     pk = ToggleColumn()
-    name = tables.Column(verbose_name='Name')
-    prefix_count = tables.Column(accessor=Accessor('count_prefixes'), orderable=False, verbose_name='Prefixes')
-    vlan_count = tables.Column(accessor=Accessor('count_vlans'), orderable=False, verbose_name='VLANs')
-    slug = tables.Column(verbose_name='Slug')
+    prefix_count = tables.TemplateColumn(
+        accessor=Accessor('prefixes.count'),
+        template_code=ROLE_PREFIX_COUNT,
+        orderable=False,
+        verbose_name='Prefixes'
+    )
+    vlan_count = tables.TemplateColumn(
+        accessor=Accessor('vlans.count'),
+        template_code=ROLE_VLAN_COUNT,
+        orderable=False,
+        verbose_name='VLANs'
+    )
     actions = tables.TemplateColumn(template_code=ROLE_ACTIONS, attrs={'td': {'class': 'text-right'}}, verbose_name='')
 
     class Meta(BaseTable.Meta):
@@ -245,7 +269,7 @@ class PrefixTable(BaseTable):
     prefix = tables.TemplateColumn(PREFIX_LINK, attrs={'th': {'style': 'padding-left: 17px'}})
     status = tables.TemplateColumn(STATUS_LABEL)
     vrf = tables.TemplateColumn(VRF_LINK, verbose_name='VRF')
-    tenant = tables.TemplateColumn(TENANT_LINK)
+    tenant = tables.TemplateColumn(template_code=TENANT_LINK)
     site = tables.LinkColumn('dcim:site', args=[Accessor('site.slug')])
     vlan = tables.LinkColumn('ipam:vlan', args=[Accessor('vlan.pk')], verbose_name='VLAN')
     role = tables.TemplateColumn(PREFIX_ROLE_LINK)
@@ -274,7 +298,7 @@ class IPAddressTable(BaseTable):
     address = tables.TemplateColumn(IPADDRESS_LINK, verbose_name='IP Address')
     vrf = tables.TemplateColumn(VRF_LINK, verbose_name='VRF')
     status = tables.TemplateColumn(STATUS_LABEL)
-    tenant = tables.TemplateColumn(TENANT_LINK)
+    tenant = tables.TemplateColumn(template_code=TENANT_LINK)
     parent = tables.TemplateColumn(IPADDRESS_PARENT, orderable=False)
     interface = tables.Column(orderable=False)
 
@@ -336,7 +360,7 @@ class VLANTable(BaseTable):
     vid = tables.LinkColumn('ipam:vlan', args=[Accessor('pk')], verbose_name='ID')
     site = tables.LinkColumn('dcim:site', args=[Accessor('site.slug')])
     group = tables.Column(accessor=Accessor('group.name'), verbose_name='Group')
-    tenant = tables.LinkColumn('tenancy:tenant', args=[Accessor('tenant.slug')])
+    tenant = tables.TemplateColumn(template_code=COL_TENANT)
     status = tables.TemplateColumn(STATUS_LABEL)
     role = tables.TemplateColumn(VLAN_ROLE_LINK)
 
@@ -350,3 +374,21 @@ class VLANDetailTable(VLANTable):
 
     class Meta(VLANTable.Meta):
         fields = ('pk', 'vid', 'site', 'group', 'name', 'prefixes', 'tenant', 'status', 'role', 'description')
+
+
+class VLANMemberTable(BaseTable):
+    parent = tables.LinkColumn(order_by=['device', 'virtual_machine'])
+    name = tables.Column(verbose_name='Interface')
+    untagged = tables.TemplateColumn(
+        template_code=VLAN_MEMBER_UNTAGGED,
+        orderable=False
+    )
+    actions = tables.TemplateColumn(
+        template_code=VLAN_MEMBER_ACTIONS,
+        attrs={'td': {'class': 'text-right'}},
+        verbose_name=''
+    )
+
+    class Meta(BaseTable.Meta):
+        model = Interface
+        fields = ('parent', 'name', 'untagged', 'actions')

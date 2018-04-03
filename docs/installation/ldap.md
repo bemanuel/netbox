@@ -81,13 +81,13 @@ AUTH_LDAP_USER_ATTR_MAP = {
 
 # User Groups for Permissions
 !!! info
-    When using Microsoft Active Directory, Support for nested Groups can be activated by using `GroupOfNamesType()` instead of `NestedGroupOfNamesType()` for `AUTH_LDAP_GROUP_TYPE`.
+    When using Microsoft Active Directory, support for nested groups can be activated by using `NestedGroupOfNamesType()` instead of `GroupOfNamesType()` for `AUTH_LDAP_GROUP_TYPE`.
 
 ```python
 from django_auth_ldap.config import LDAPSearch, GroupOfNamesType
 
 # This search ought to return all groups to which the user belongs. django_auth_ldap uses this to determine group
-# heirarchy.
+# hierarchy.
 AUTH_LDAP_GROUP_SEARCH = LDAPSearch("dc=example,dc=com", ldap.SCOPE_SUBTREE,
                                     "(objectClass=group)")
 AUTH_LDAP_GROUP_TYPE = GroupOfNamesType()

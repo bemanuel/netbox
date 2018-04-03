@@ -4,6 +4,7 @@ import django_tables2 as tables
 from django_tables2.utils import Accessor
 
 from dcim.models import Interface
+from tenancy.tables import COL_TENANT
 from utilities.tables import BaseTable, ToggleColumn
 from .models import Cluster, ClusterGroup, ClusterType, VirtualMachine
 
@@ -24,7 +25,7 @@ VIRTUALMACHINE_STATUS = """
 """
 
 VIRTUALMACHINE_ROLE = """
-<label class="label" style="background-color: #{{ record.role.color }}">{{ value }}</label>
+{% if record.role %}<label class="label" style="background-color: #{{ record.role.color }}">{{ value }}</label>{% else %}&mdash;{% endif %}
 """
 
 VIRTUALMACHINE_PRIMARY_IP = """
@@ -79,8 +80,9 @@ class ClusterGroupTable(BaseTable):
 class ClusterTable(BaseTable):
     pk = ToggleColumn()
     name = tables.LinkColumn()
-    device_count = tables.Column(verbose_name='Devices')
-    vm_count = tables.Column(verbose_name='VMs')
+    site = tables.LinkColumn('dcim:site', args=[Accessor('site.slug')])
+    device_count = tables.Column(accessor=Accessor('devices.count'), orderable=False, verbose_name='Devices')
+    vm_count = tables.Column(accessor=Accessor('virtual_machines.count'), orderable=False, verbose_name='VMs')
 
     class Meta(BaseTable.Meta):
         model = Cluster
@@ -97,7 +99,7 @@ class VirtualMachineTable(BaseTable):
     status = tables.TemplateColumn(template_code=VIRTUALMACHINE_STATUS)
     cluster = tables.LinkColumn('virtualization:cluster', args=[Accessor('cluster.pk')])
     role = tables.TemplateColumn(VIRTUALMACHINE_ROLE)
-    tenant = tables.LinkColumn('tenancy:tenant', args=[Accessor('tenant.slug')])
+    tenant = tables.TemplateColumn(template_code=COL_TENANT)
 
     class Meta(BaseTable.Meta):
         model = VirtualMachine

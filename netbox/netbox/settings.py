@@ -1,6 +1,8 @@
 import logging
 import os
 import socket
+import sys
+import warnings
 
 from django.contrib.messages import constants as messages
 from django.core.exceptions import ImproperlyConfigured
@@ -12,8 +14,15 @@ except ImportError:
         "Configuration file is not present. Please define netbox/netbox/configuration.py per the documentation."
     )
 
+# Raise a deprecation warning for Python 2.x
+if sys.version_info[0] < 3:
+    warnings.warn(
+        "Support for Python 2 will be removed in NetBox v2.5. Please consider migration to Python 3 at your earliest "
+        "opportunity. Guidance is available in the documentation at http://netbox.readthedocs.io/.",
+        DeprecationWarning
+    )
 
-VERSION = '2.2.8'
+VERSION = '2.3.2'
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -124,7 +133,7 @@ INSTALLED_APPS = (
     'django_tables2',
     'mptt',
     'rest_framework',
-    'rest_framework_swagger',
+    'timezone_field',
     'circuits',
     'dcim',
     'ipam',
@@ -134,6 +143,7 @@ INSTALLED_APPS = (
     'users',
     'utilities',
     'virtualization',
+    'drf_yasg',
 )
 
 # Middleware
@@ -235,6 +245,32 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': PAGINATE_COUNT,
     'VIEW_NAME_FUNCTION': 'netbox.api.get_view_name',
 }
+
+# drf_yasg settings for Swagger
+SWAGGER_SETTINGS = {
+    'DEFAULT_FIELD_INSPECTORS': [
+        'utilities.custom_inspectors.NullableBooleanFieldInspector',
+        'utilities.custom_inspectors.CustomChoiceFieldInspector',
+        'drf_yasg.inspectors.CamelCaseJSONFilter',
+        'drf_yasg.inspectors.ReferencingSerializerInspector',
+        'drf_yasg.inspectors.RelatedFieldInspector',
+        'drf_yasg.inspectors.ChoiceFieldInspector',
+        'drf_yasg.inspectors.FileFieldInspector',
+        'drf_yasg.inspectors.DictFieldInspector',
+        'drf_yasg.inspectors.SimpleFieldInspector',
+        'drf_yasg.inspectors.StringDefaultFieldInspector',
+    ],
+    'DEFAULT_FILTER_INSPECTORS': [
+        'utilities.custom_inspectors.IdInFilterInspector',
+        'drf_yasg.inspectors.CoreAPICompatInspector',
+    ],
+    'DEFAULT_PAGINATOR_INSPECTORS': [
+        'utilities.custom_inspectors.NullablePaginatorInspector',
+        'drf_yasg.inspectors.DjangoRestResponsePagination',
+        'drf_yasg.inspectors.CoreAPICompatInspector',
+    ]
+}
+
 
 # Django debug toolbar
 INTERNAL_IPS = (

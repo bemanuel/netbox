@@ -9,9 +9,9 @@ from extras.forms import CustomFieldForm, CustomFieldBulkEditForm, CustomFieldFi
 from tenancy.forms import TenancyForm
 from tenancy.models import Tenant
 from utilities.forms import (
-    APISelect, BootstrapMixin, BulkEditNullBooleanSelect, ChainedModelChoiceField, CSVChoiceField,
-    ExpandableIPAddressField, FilterChoiceField, FlexibleModelChoiceField, Livesearch, ReturnURLForm, SlugField,
-    add_blank_choice,
+    AnnotatedMultipleChoiceField, APISelect, BootstrapMixin, BulkEditNullBooleanSelect, ChainedModelChoiceField,
+    CSVChoiceField, ExpandableIPAddressField, FilterChoiceField, FlexibleModelChoiceField, Livesearch, ReturnURLForm,
+    SlugField, add_blank_choice,
 )
 from virtualization.models import VirtualMachine
 from .constants import IPADDRESS_ROLE_CHOICES, IPADDRESS_STATUS_CHOICES, PREFIX_STATUS_CHOICES, VLAN_STATUS_CHOICES
@@ -57,7 +57,7 @@ class VRFCSVForm(forms.ModelForm):
 
     class Meta:
         model = VRF
-        fields = ['name', 'rd', 'tenant', 'enforce_unique', 'description']
+        fields = VRF.csv_headers
         help_texts = {
             'name': 'VRF name',
         }
@@ -78,8 +78,11 @@ class VRFBulkEditForm(BootstrapMixin, CustomFieldBulkEditForm):
 class VRFFilterForm(BootstrapMixin, CustomFieldFilterForm):
     model = VRF
     q = forms.CharField(required=False, label='Search')
-    tenant = FilterChoiceField(queryset=Tenant.objects.annotate(filter_count=Count('vrfs')), to_field_name='slug',
-                               null_option=(0, None))
+    tenant = FilterChoiceField(
+        queryset=Tenant.objects.annotate(filter_count=Count('vrfs')),
+        to_field_name='slug',
+        null_label='-- None --'
+    )
 
 
 #
@@ -99,7 +102,7 @@ class RIRCSVForm(forms.ModelForm):
 
     class Meta:
         model = RIR
-        fields = ['name', 'slug', 'is_private']
+        fields = RIR.csv_headers
         help_texts = {
             'name': 'RIR name',
         }
@@ -141,7 +144,7 @@ class AggregateCSVForm(forms.ModelForm):
 
     class Meta:
         model = Aggregate
-        fields = ['prefix', 'rir', 'date_added', 'description']
+        fields = Aggregate.csv_headers
 
 
 class AggregateBulkEditForm(BootstrapMixin, CustomFieldBulkEditForm):
@@ -182,7 +185,7 @@ class RoleCSVForm(forms.ModelForm):
 
     class Meta:
         model = Role
-        fields = ['name', 'slug']
+        fields = Role.csv_headers
         help_texts = {
             'name': 'Role name',
         }
@@ -296,9 +299,7 @@ class PrefixCSVForm(forms.ModelForm):
 
     class Meta:
         model = Prefix
-        fields = [
-            'prefix', 'vrf', 'tenant', 'site', 'vlan_group', 'vlan_vid', 'status', 'role', 'is_pool', 'description',
-        ]
+        fields = Prefix.csv_headers
 
     def clean(self):
 
@@ -349,13 +350,6 @@ class PrefixBulkEditForm(BootstrapMixin, CustomFieldBulkEditForm):
         nullable_fields = ['site', 'vrf', 'tenant', 'role', 'description']
 
 
-def prefix_status_choices():
-    status_counts = {}
-    for status in Prefix.objects.values('status').annotate(count=Count('status')).order_by('status'):
-        status_counts[status['status']] = status['count']
-    return [(s[0], '{} ({})'.format(s[1], status_counts.get(s[0], 0))) for s in PREFIX_STATUS_CHOICES]
-
-
 class PrefixFilterForm(BootstrapMixin, CustomFieldFilterForm):
     model = Prefix
     q = forms.CharField(required=False, label='Search')
@@ -368,23 +362,28 @@ class PrefixFilterForm(BootstrapMixin, CustomFieldFilterForm):
         queryset=VRF.objects.annotate(filter_count=Count('prefixes')),
         to_field_name='rd',
         label='VRF',
-        null_option=(0, 'Global')
+        null_label='-- Global --'
     )
     tenant = FilterChoiceField(
         queryset=Tenant.objects.annotate(filter_count=Count('prefixes')),
         to_field_name='slug',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
-    status = forms.MultipleChoiceField(choices=prefix_status_choices, required=False)
+    status = AnnotatedMultipleChoiceField(
+        choices=PREFIX_STATUS_CHOICES,
+        annotate=Prefix.objects.all(),
+        annotate_field='status',
+        required=False
+    )
     site = FilterChoiceField(
         queryset=Site.objects.annotate(filter_count=Count('prefixes')),
         to_field_name='slug',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
     role = FilterChoiceField(
         queryset=Role.objects.annotate(filter_count=Count('prefixes')),
         to_field_name='slug',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
     expand = forms.BooleanField(required=False, label='Expand prefix hierarchy')
 
@@ -519,17 +518,14 @@ class IPAddressForm(BootstrapMixin, TenancyForm, ReturnURLForm, CustomFieldForm)
             parent.save()
 
         # Clear assignment as primary for device if set.
-        else:
-            try:
-                if ipaddress.address.version == 4:
-                    device = ipaddress.primary_ip4_for
-                    device.primary_ip4 = None
-                else:
-                    device = ipaddress.primary_ip6_for
-                    device.primary_ip6 = None
-                device.save()
-            except Device.DoesNotExist:
-                pass
+        elif self.cleaned_data['interface']:
+            parent = self.cleaned_data['interface'].parent
+            if ipaddress.address.version == 4 and parent.primary_ip4 == self:
+                parent.primary_ip4 = None
+                parent.save()
+            elif ipaddress.address.version == 6 and parent.primary_ip6 == self:
+                parent.primary_ip6 = None
+                parent.save()
 
         return ipaddress
 
@@ -606,10 +602,7 @@ class IPAddressCSVForm(forms.ModelForm):
 
     class Meta:
         model = IPAddress
-        fields = [
-            'address', 'vrf', 'tenant', 'status', 'role', 'device', 'virtual_machine', 'interface_name', 'is_primary',
-            'description',
-        ]
+        fields = IPAddress.csv_headers
 
     def clean(self):
 
@@ -693,20 +686,6 @@ class IPAddressAssignForm(BootstrapMixin, forms.Form):
     address = forms.CharField(label='IP Address')
 
 
-def ipaddress_status_choices():
-    status_counts = {}
-    for status in IPAddress.objects.values('status').annotate(count=Count('status')).order_by('status'):
-        status_counts[status['status']] = status['count']
-    return [(s[0], '{} ({})'.format(s[1], status_counts.get(s[0], 0))) for s in IPADDRESS_STATUS_CHOICES]
-
-
-def ipaddress_role_choices():
-    role_counts = {}
-    for role in IPAddress.objects.values('role').annotate(count=Count('role')).order_by('role'):
-        role_counts[role['role']] = role['count']
-    return [(r[0], '{} ({})'.format(r[1], role_counts.get(r[0], 0))) for r in IPADDRESS_ROLE_CHOICES]
-
-
 class IPAddressFilterForm(BootstrapMixin, CustomFieldFilterForm):
     model = IPAddress
     q = forms.CharField(required=False, label='Search')
@@ -719,15 +698,25 @@ class IPAddressFilterForm(BootstrapMixin, CustomFieldFilterForm):
         queryset=VRF.objects.annotate(filter_count=Count('ip_addresses')),
         to_field_name='rd',
         label='VRF',
-        null_option=(0, 'Global')
+        null_label='-- Global --'
     )
     tenant = FilterChoiceField(
         queryset=Tenant.objects.annotate(filter_count=Count('ip_addresses')),
         to_field_name='slug',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
-    status = forms.MultipleChoiceField(choices=ipaddress_status_choices, required=False)
-    role = forms.MultipleChoiceField(choices=ipaddress_role_choices, required=False)
+    status = AnnotatedMultipleChoiceField(
+        choices=IPADDRESS_STATUS_CHOICES,
+        annotate=IPAddress.objects.all(),
+        annotate_field='status',
+        required=False
+    )
+    role = AnnotatedMultipleChoiceField(
+        choices=IPADDRESS_ROLE_CHOICES,
+        annotate=IPAddress.objects.all(),
+        annotate_field='role',
+        required=False
+    )
 
 
 #
@@ -756,7 +745,7 @@ class VLANGroupCSVForm(forms.ModelForm):
 
     class Meta:
         model = VLANGroup
-        fields = ['site', 'name', 'slug']
+        fields = VLANGroup.csv_headers
         help_texts = {
             'name': 'Name of VLAN group',
         }
@@ -766,7 +755,7 @@ class VLANGroupFilterForm(BootstrapMixin, forms.Form):
     site = FilterChoiceField(
         queryset=Site.objects.annotate(filter_count=Count('vlan_groups')),
         to_field_name='slug',
-        null_option=(0, 'Global')
+        null_label='-- Global --'
     )
 
 
@@ -846,7 +835,7 @@ class VLANCSVForm(forms.ModelForm):
 
     class Meta:
         model = VLAN
-        fields = ['site', 'group_name', 'vid', 'name', 'tenant', 'status', 'role', 'description']
+        fields = VLAN.csv_headers
         help_texts = {
             'vid': 'Numeric VLAN ID (1-4095)',
             'name': 'VLAN name',
@@ -883,36 +872,34 @@ class VLANBulkEditForm(BootstrapMixin, CustomFieldBulkEditForm):
         nullable_fields = ['site', 'group', 'tenant', 'role', 'description']
 
 
-def vlan_status_choices():
-    status_counts = {}
-    for status in VLAN.objects.values('status').annotate(count=Count('status')).order_by('status'):
-        status_counts[status['status']] = status['count']
-    return [(s[0], '{} ({})'.format(s[1], status_counts.get(s[0], 0))) for s in VLAN_STATUS_CHOICES]
-
-
 class VLANFilterForm(BootstrapMixin, CustomFieldFilterForm):
     model = VLAN
     q = forms.CharField(required=False, label='Search')
     site = FilterChoiceField(
         queryset=Site.objects.annotate(filter_count=Count('vlans')),
         to_field_name='slug',
-        null_option=(0, 'Global')
+        null_label='-- Global --'
     )
     group_id = FilterChoiceField(
         queryset=VLANGroup.objects.annotate(filter_count=Count('vlans')),
         label='VLAN group',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
     tenant = FilterChoiceField(
         queryset=Tenant.objects.annotate(filter_count=Count('vlans')),
         to_field_name='slug',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
-    status = forms.MultipleChoiceField(choices=vlan_status_choices, required=False)
+    status = AnnotatedMultipleChoiceField(
+        choices=VLAN_STATUS_CHOICES,
+        annotate=VLAN.objects.all(),
+        annotate_field='status',
+        required=False
+    )
     role = FilterChoiceField(
         queryset=Role.objects.annotate(filter_count=Count('vlans')),
         to_field_name='slug',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
 
 
@@ -936,8 +923,9 @@ class ServiceForm(BootstrapMixin, forms.ModelForm):
 
         # Limit IP address choices to those assigned to interfaces of the parent device/VM
         if self.instance.device:
+            vc_interface_ids = [i['id'] for i in self.instance.device.vc_interfaces.values('id')]
             self.fields['ipaddresses'].queryset = IPAddress.objects.filter(
-                interface__device=self.instance.device
+                interface_id__in=vc_interface_ids
             )
         elif self.instance.virtual_machine:
             self.fields['ipaddresses'].queryset = IPAddress.objects.filter(

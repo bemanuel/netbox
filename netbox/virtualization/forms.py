@@ -5,18 +5,20 @@ from django.core.exceptions import ValidationError
 from django.db.models import Count
 from mptt.forms import TreeNodeChoiceField
 
-from dcim.constants import IFACE_FF_VIRTUAL
+from dcim.constants import IFACE_FF_VIRTUAL, IFACE_MODE_ACCESS, IFACE_MODE_TAGGED_ALL
+from dcim.forms import INTERFACE_MODE_HELP_TEXT
 from dcim.formfields import MACAddressFormField
 from dcim.models import Device, DeviceRole, Interface, Platform, Rack, Region, Site
 from extras.forms import CustomFieldBulkEditForm, CustomFieldForm, CustomFieldFilterForm
+from ipam.models import IPAddress
 from tenancy.forms import TenancyForm
 from tenancy.models import Tenant
 from utilities.forms import (
-    add_blank_choice, APISelect, APISelectMultiple, BootstrapMixin, BulkEditForm, BulkEditNullBooleanSelect,
+    AnnotatedMultipleChoiceField, APISelect, APISelectMultiple, BootstrapMixin, BulkEditForm, BulkEditNullBooleanSelect,
     ChainedFieldsMixin, ChainedModelChoiceField, ChainedModelMultipleChoiceField, CommentField, ComponentForm,
-    ConfirmationForm, CSVChoiceField, ExpandableNameField, FilterChoiceField, SlugField, SmallTextarea,
+    ConfirmationForm, CSVChoiceField, ExpandableNameField, FilterChoiceField, SlugField, SmallTextarea, add_blank_choice
 )
-from .constants import STATUS_CHOICES
+from .constants import VM_STATUS_CHOICES
 from .models import Cluster, ClusterGroup, ClusterType, VirtualMachine
 
 VIFACE_FF_CHOICES = (
@@ -41,7 +43,7 @@ class ClusterTypeCSVForm(forms.ModelForm):
 
     class Meta:
         model = ClusterType
-        fields = ['name', 'slug']
+        fields = ClusterType.csv_headers
         help_texts = {
             'name': 'Name of cluster type',
         }
@@ -64,7 +66,7 @@ class ClusterGroupCSVForm(forms.ModelForm):
 
     class Meta:
         model = ClusterGroup
-        fields = ['name', 'slug']
+        fields = ClusterGroup.csv_headers
         help_texts = {
             'name': 'Name of cluster group',
         }
@@ -112,7 +114,7 @@ class ClusterCSVForm(forms.ModelForm):
 
     class Meta:
         model = Cluster
-        fields = ['name', 'type', 'group', 'site', 'comments']
+        fields = Cluster.csv_headers
 
 
 class ClusterBulkEditForm(BootstrapMixin, CustomFieldBulkEditForm):
@@ -137,13 +139,13 @@ class ClusterFilterForm(BootstrapMixin, CustomFieldFilterForm):
     group = FilterChoiceField(
         queryset=ClusterGroup.objects.annotate(filter_count=Count('clusters')),
         to_field_name='slug',
-        null_option=(0, 'None'),
+        null_label='-- None --',
         required=False,
     )
     site = FilterChoiceField(
         queryset=Site.objects.annotate(filter_count=Count('clusters')),
         to_field_name='slug',
-        null_option=(0, 'None'),
+        null_label='-- None --',
         required=False,
     )
 
@@ -246,8 +248,8 @@ class VirtualMachineForm(BootstrapMixin, TenancyForm, CustomFieldForm):
     class Meta:
         model = VirtualMachine
         fields = [
-            'name', 'status', 'cluster_group', 'cluster', 'role', 'tenant', 'platform', 'vcpus', 'memory', 'disk',
-            'comments',
+            'name', 'status', 'cluster_group', 'cluster', 'role', 'tenant', 'platform', 'primary_ip4', 'primary_ip6',
+            'vcpus', 'memory', 'disk', 'comments',
         ]
 
     def __init__(self, *args, **kwargs):
@@ -261,10 +263,45 @@ class VirtualMachineForm(BootstrapMixin, TenancyForm, CustomFieldForm):
 
         super(VirtualMachineForm, self).__init__(*args, **kwargs)
 
+        if self.instance.pk:
+
+            # Compile list of choices for primary IPv4 and IPv6 addresses
+            for family in [4, 6]:
+                ip_choices = [(None, '---------')]
+                # Collect interface IPs
+                interface_ips = IPAddress.objects.select_related('interface').filter(
+                    family=family, interface__virtual_machine=self.instance
+                )
+                if interface_ips:
+                    ip_choices.append(
+                        ('Interface IPs', [
+                            (ip.id, '{} ({})'.format(ip.address, ip.interface)) for ip in interface_ips
+                        ])
+                    )
+                # Collect NAT IPs
+                nat_ips = IPAddress.objects.select_related('nat_inside').filter(
+                    family=family, nat_inside__interface__virtual_machine=self.instance
+                )
+                if nat_ips:
+                    ip_choices.append(
+                        ('NAT IPs', [
+                            (ip.id, '{} ({})'.format(ip.address, ip.nat_inside.address)) for ip in nat_ips
+                        ])
+                    )
+                self.fields['primary_ip{}'.format(family)].choices = ip_choices
+
+        else:
+
+            # An object that doesn't exist yet can't have any IPs assigned to it
+            self.fields['primary_ip4'].choices = []
+            self.fields['primary_ip4'].widget.attrs['readonly'] = True
+            self.fields['primary_ip6'].choices = []
+            self.fields['primary_ip6'].widget.attrs['readonly'] = True
+
 
 class VirtualMachineCSVForm(forms.ModelForm):
     status = CSVChoiceField(
-        choices=STATUS_CHOICES,
+        choices=VM_STATUS_CHOICES,
         required=False,
         help_text='Operational status of device'
     )
@@ -306,12 +343,12 @@ class VirtualMachineCSVForm(forms.ModelForm):
 
     class Meta:
         model = VirtualMachine
-        fields = ['name', 'status', 'cluster', 'role', 'tenant', 'platform', 'vcpus', 'memory', 'disk', 'comments']
+        fields = VirtualMachine.csv_headers
 
 
 class VirtualMachineBulkEditForm(BootstrapMixin, CustomFieldBulkEditForm):
     pk = forms.ModelMultipleChoiceField(queryset=VirtualMachine.objects.all(), widget=forms.MultipleHiddenInput)
-    status = forms.ChoiceField(choices=add_blank_choice(STATUS_CHOICES), required=False, initial='')
+    status = forms.ChoiceField(choices=add_blank_choice(VM_STATUS_CHOICES), required=False, initial='')
     cluster = forms.ModelChoiceField(queryset=Cluster.objects.all(), required=False)
     role = forms.ModelChoiceField(queryset=DeviceRole.objects.filter(vm_role=True), required=False)
     tenant = forms.ModelChoiceField(queryset=Tenant.objects.all(), required=False)
@@ -325,25 +362,18 @@ class VirtualMachineBulkEditForm(BootstrapMixin, CustomFieldBulkEditForm):
         nullable_fields = ['role', 'tenant', 'platform', 'vcpus', 'memory', 'disk', 'comments']
 
 
-def vm_status_choices():
-    status_counts = {}
-    for status in VirtualMachine.objects.values('status').annotate(count=Count('status')).order_by('status'):
-        status_counts[status['status']] = status['count']
-    return [(s[0], '{} ({})'.format(s[1], status_counts.get(s[0], 0))) for s in STATUS_CHOICES]
-
-
 class VirtualMachineFilterForm(BootstrapMixin, CustomFieldFilterForm):
     model = VirtualMachine
     q = forms.CharField(required=False, label='Search')
     cluster_group = FilterChoiceField(
         queryset=ClusterGroup.objects.all(),
         to_field_name='slug',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
     cluster_type = FilterChoiceField(
         queryset=ClusterType.objects.all(),
         to_field_name='slug',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
     cluster_id = FilterChoiceField(
         queryset=Cluster.objects.annotate(filter_count=Count('virtual_machines')),
@@ -352,23 +382,28 @@ class VirtualMachineFilterForm(BootstrapMixin, CustomFieldFilterForm):
     site = FilterChoiceField(
         queryset=Site.objects.annotate(filter_count=Count('clusters__virtual_machines')),
         to_field_name='slug',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
     role = FilterChoiceField(
         queryset=DeviceRole.objects.filter(vm_role=True).annotate(filter_count=Count('virtual_machines')),
         to_field_name='slug',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
-    status = forms.MultipleChoiceField(choices=vm_status_choices, required=False)
+    status = AnnotatedMultipleChoiceField(
+        choices=VM_STATUS_CHOICES,
+        annotate=VirtualMachine.objects.all(),
+        annotate_field='status',
+        required=False
+    )
     tenant = FilterChoiceField(
         queryset=Tenant.objects.annotate(filter_count=Count('virtual_machines')),
         to_field_name='slug',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
     platform = FilterChoiceField(
         queryset=Platform.objects.annotate(filter_count=Count('virtual_machines')),
         to_field_name='slug',
-        null_option=(0, 'None')
+        null_label='-- None --'
     )
 
 
@@ -380,11 +415,37 @@ class InterfaceForm(BootstrapMixin, forms.ModelForm):
 
     class Meta:
         model = Interface
-        fields = ['virtual_machine', 'name', 'form_factor', 'enabled', 'mac_address', 'mtu', 'description']
+        fields = [
+            'virtual_machine', 'name', 'form_factor', 'enabled', 'mac_address', 'mtu', 'description', 'mode',
+            'untagged_vlan', 'tagged_vlans',
+        ]
         widgets = {
             'virtual_machine': forms.HiddenInput(),
             'form_factor': forms.HiddenInput(),
         }
+        labels = {
+            'mode': '802.1Q Mode',
+        }
+        help_texts = {
+            'mode': INTERFACE_MODE_HELP_TEXT,
+        }
+
+    def clean(self):
+
+        super(InterfaceForm, self).clean()
+
+        # Validate VLAN assignments
+        tagged_vlans = self.cleaned_data['tagged_vlans']
+
+        # Untagged interfaces cannot be assigned tagged VLANs
+        if self.cleaned_data['mode'] == IFACE_MODE_ACCESS and tagged_vlans:
+            raise forms.ValidationError({
+                'mode': "An access interface cannot have tagged VLANs assigned."
+            })
+
+        # Remove all tagged VLAN assignments from "tagged all" interfaces
+        elif self.cleaned_data['mode'] == IFACE_MODE_TAGGED_ALL:
+            self.cleaned_data['tagged_vlans'] = []
 
 
 class InterfaceCreateForm(ComponentForm):
@@ -406,7 +467,6 @@ class InterfaceCreateForm(ComponentForm):
 
 class InterfaceBulkEditForm(BootstrapMixin, BulkEditForm):
     pk = forms.ModelMultipleChoiceField(queryset=Interface.objects.all(), widget=forms.MultipleHiddenInput)
-    virtual_machine = forms.ModelChoiceField(queryset=VirtualMachine.objects.all(), widget=forms.HiddenInput)
     enabled = forms.NullBooleanField(required=False, widget=BulkEditNullBooleanSelect)
     mtu = forms.IntegerField(required=False, min_value=1, max_value=32767, label='MTU')
     description = forms.CharField(max_length=100, required=False)

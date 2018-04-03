@@ -491,11 +491,11 @@ class PrefixPrefixesView(View):
         prefix = get_object_or_404(Prefix.objects.all(), pk=pk)
 
         # Child prefixes table
-        child_prefixes = Prefix.objects.filter(
-            vrf=prefix.vrf, prefix__net_contained=str(prefix.prefix)
-        ).select_related(
+        child_prefixes = prefix.get_child_prefixes().select_related(
             'site', 'vlan', 'role',
         ).annotate_depth(limit=0)
+
+        # Annotate available prefixes
         if child_prefixes:
             child_prefixes = add_available_prefixes(prefix.prefix, child_prefixes)
 
@@ -848,6 +848,38 @@ class VLANView(View):
         return render(request, 'ipam/vlan.html', {
             'vlan': vlan,
             'prefix_table': prefix_table,
+        })
+
+
+class VLANMembersView(View):
+
+    def get(self, request, pk):
+
+        vlan = get_object_or_404(VLAN.objects.all(), pk=pk)
+        members = vlan.get_members().select_related('device', 'virtual_machine')
+
+        members_table = tables.VLANMemberTable(members)
+        # if request.user.has_perm('dcim.change_interface'):
+        #     members_table.columns.show('pk')
+
+        paginate = {
+            'klass': EnhancedPaginator,
+            'per_page': request.GET.get('per_page', settings.PAGINATE_COUNT)
+        }
+        RequestConfig(request, paginate).configure(members_table)
+
+        # Compile permissions list for rendering the object table
+        # permissions = {
+        #     'add': request.user.has_perm('ipam.add_ipaddress'),
+        #     'change': request.user.has_perm('ipam.change_ipaddress'),
+        #     'delete': request.user.has_perm('ipam.delete_ipaddress'),
+        # }
+
+        return render(request, 'ipam/vlan_members.html', {
+            'vlan': vlan,
+            'members_table': members_table,
+            # 'permissions': permissions,
+            # 'bulk_querystring': 'vrf_id={}&parent={}'.format(prefix.vrf.pk if prefix.vrf else '0', prefix.prefix),
         })
 
 

@@ -1,11 +1,12 @@
 from __future__ import unicode_literals
 
 import csv
-import itertools
+from io import StringIO
 import re
 
 from django import forms
 from django.conf import settings
+from django.db.models import Count
 from django.urls import reverse_lazy
 from mptt.forms import TreeNodeMultipleChoiceField
 
@@ -38,6 +39,7 @@ COLOR_CHOICES = (
     ('111111', 'Black'),
 )
 NUMERIC_EXPANSION_PATTERN = '\[((?:\d+[?:,-])+\d+)\]'
+ALPHANUMERIC_EXPANSION_PATTERN = '\[((?:[a-zA-Z0-9]+[?:,-])+[a-zA-Z0-9]+)\]'
 IP4_EXPANSION_PATTERN = '\[((?:[0-9]{1,3}[?:,-])+[0-9]{1,3})\]'
 IP6_EXPANSION_PATTERN = '\[((?:[0-9a-f]{1,4}[?:,-])+[0-9a-f]{1,4})\]'
 
@@ -71,6 +73,45 @@ def expand_numeric_pattern(string):
     for i in parsed_range:
         if re.search(NUMERIC_EXPANSION_PATTERN, remnant):
             for string in expand_numeric_pattern(remnant):
+                yield "{}{}{}".format(lead, i, string)
+        else:
+            yield "{}{}{}".format(lead, i, remnant)
+
+
+def parse_alphanumeric_range(string):
+    """
+    Expand an alphanumeric range (continuous or not) into a list.
+    'a-d,f' => [a, b, c, d, f]
+    '0-3,a-d' => [0, 1, 2, 3, a, b, c, d]
+    """
+    values = []
+    for dash_range in string.split(','):
+        try:
+            begin, end = dash_range.split('-')
+            vals = begin + end
+            # Break out of loop if there's an invalid pattern to return an error
+            if (not (vals.isdigit() or vals.isalpha())) or (vals.isalpha() and not (vals.isupper() or vals.islower())):
+                return []
+        except ValueError:
+            begin, end = dash_range, dash_range
+        if begin.isdigit() and end.isdigit():
+            for n in list(range(int(begin), int(end) + 1)):
+                values.append(n)
+        else:
+            for n in list(range(ord(begin), ord(end) + 1)):
+                values.append(chr(n))
+    return values
+
+
+def expand_alphanumeric_pattern(string):
+    """
+    Expand an alphabetic pattern into a list of strings.
+    """
+    lead, pattern, remnant = re.split(ALPHANUMERIC_EXPANSION_PATTERN, string, maxsplit=1)
+    parsed_range = parse_alphanumeric_range(pattern)
+    for i in parsed_range:
+        if re.search(ALPHANUMERIC_EXPANSION_PATTERN, remnant):
+            for string in expand_alphanumeric_pattern(remnant):
                 yield "{}{}{}".format(lead, i, string)
         else:
             yield "{}{}{}".format(lead, i, remnant)
@@ -119,7 +160,7 @@ class ColorSelect(forms.Select):
     """
     Extends the built-in Select widget to colorize each <option>.
     """
-    option_template_name = 'colorselect_option.html'
+    option_template_name = 'widgets/colorselect_option.html'
 
     def __init__(self, *args, **kwargs):
         kwargs['choices'] = COLOR_CHOICES
@@ -144,7 +185,14 @@ class SelectWithDisabled(forms.Select):
     Modified the stock Select widget to accept choices using a dict() for a label. The dict for each option must include
     'label' (string) and 'disabled' (boolean).
     """
-    option_template_name = 'selectwithdisabled_option.html'
+    option_template_name = 'widgets/selectwithdisabled_option.html'
+
+
+class SelectWithPK(forms.Select):
+    """
+    Include the primary key of each option in the option label (e.g. "Router7 (4721)").
+    """
+    option_template_name = 'widgets/select_option_with_pk.html'
 
 
 class ArrayFieldSelectMultiple(SelectWithDisabled, forms.SelectMultiple):
@@ -245,14 +293,10 @@ class CSVDataField(forms.CharField):
 
     def to_python(self, value):
 
-        # Python 2's csv module has problems with Unicode
-        if not isinstance(value, str):
-            value = value.encode('utf-8')
-
         records = []
-        reader = csv.reader(value.splitlines())
+        reader = csv.reader(StringIO(value))
 
-        # Consume and valdiate the first line of CSV data as column headers
+        # Consume and validate the first line of CSV data as column headers
         headers = next(reader)
         for f in self.required_fields:
             if f not in headers:
@@ -302,12 +346,15 @@ class ExpandableNameField(forms.CharField):
     def __init__(self, *args, **kwargs):
         super(ExpandableNameField, self).__init__(*args, **kwargs)
         if not self.help_text:
-            self.help_text = 'Numeric ranges are supported for bulk creation.<br />'\
-                             'Example: <code>ge-0/0/[0-23,25,30]</code>'
+            self.help_text = 'Alphanumeric ranges are supported for bulk creation.<br />' \
+                             'Mixed cases and types within a single range are not supported.<br />' \
+                             'Examples:<ul><li><code>ge-0/0/[0-23,25,30]</code></li>' \
+                             '<li><code>e[0-3][a-d,f]</code></li>' \
+                             '<li><code>e[0-3,a-d,f]</code></li></ul>'
 
     def to_python(self, value):
-        if re.search(NUMERIC_EXPANSION_PATTERN, value):
-            return list(expand_numeric_pattern(value))
+        if re.search(ALPHANUMERIC_EXPANSION_PATTERN, value):
+            return list(expand_alphanumeric_pattern(value))
         return [value]
 
 
@@ -407,11 +454,25 @@ class SlugField(forms.SlugField):
         self.widget.attrs['slug-source'] = slug_source
 
 
-class FilterChoiceFieldMixin(object):
-    iterator = forms.models.ModelChoiceIterator
+class FilterChoiceIterator(forms.models.ModelChoiceIterator):
 
-    def __init__(self, null_option=None, *args, **kwargs):
-        self.null_option = null_option
+    def __iter__(self):
+        # Filter on "empty" choice using FILTERS_NULL_CHOICE_VALUE (instead of an empty string)
+        if self.field.null_label is not None:
+            yield (settings.FILTERS_NULL_CHOICE_VALUE, self.field.null_label)
+        queryset = self.queryset.all()
+        # Can't use iterator() when queryset uses prefetch_related()
+        if not queryset._prefetch_related_lookups:
+            queryset = queryset.iterator()
+        for obj in queryset:
+            yield self.choice(obj)
+
+
+class FilterChoiceFieldMixin(object):
+    iterator = FilterChoiceIterator
+
+    def __init__(self, null_label=None, *args, **kwargs):
+        self.null_label = null_label
         if 'required' not in kwargs:
             kwargs['required'] = False
         if 'widget' not in kwargs:
@@ -424,15 +485,6 @@ class FilterChoiceFieldMixin(object):
             return '{} ({})'.format(label, obj.filter_count)
         return label
 
-    def _get_choices(self):
-        if hasattr(self, '_choices'):
-            return self._choices
-        if self.null_option is not None:
-            return itertools.chain([self.null_option], self.iterator(self))
-        return self.iterator(self)
-
-    choices = property(_get_choices, forms.ChoiceField._set_choices)
-
 
 class FilterChoiceField(FilterChoiceFieldMixin, forms.ModelMultipleChoiceField):
     pass
@@ -440,6 +492,38 @@ class FilterChoiceField(FilterChoiceFieldMixin, forms.ModelMultipleChoiceField):
 
 class FilterTreeNodeMultipleChoiceField(FilterChoiceFieldMixin, TreeNodeMultipleChoiceField):
     pass
+
+
+class AnnotatedMultipleChoiceField(forms.MultipleChoiceField):
+    """
+    Render a set of static choices with each choice annotated to include a count of related objects. For example, this
+    field can be used to display a list of all available device statuses along with the number of devices currently
+    assigned to each status.
+    """
+
+    def annotate_choices(self):
+        queryset = self.annotate.values(
+            self.annotate_field
+        ).annotate(
+            count=Count(self.annotate_field)
+        ).order_by(
+            self.annotate_field
+        )
+        choice_counts = {
+            c[self.annotate_field]: c['count'] for c in queryset
+        }
+        annotated_choices = [
+            (c[0], '{} ({})'.format(c[1], choice_counts.get(c[0], 0))) for c in self.static_choices
+        ]
+
+        return annotated_choices
+
+    def __init__(self, choices, annotate, annotate_field, *args, **kwargs):
+        self.annotate = annotate
+        self.annotate_field = annotate_field
+        self.static_choices = choices
+
+        super(AnnotatedMultipleChoiceField, self).__init__(choices=self.annotate_choices, *args, **kwargs)
 
 
 class LaxURLField(forms.URLField):
@@ -531,9 +615,11 @@ class ComponentForm(BootstrapMixin, forms.Form):
 
 class BulkEditForm(forms.Form):
 
-    def __init__(self, model, *args, **kwargs):
+    def __init__(self, model, parent_obj=None, *args, **kwargs):
         super(BulkEditForm, self).__init__(*args, **kwargs)
         self.model = model
+        self.parent_obj = parent_obj
+
         # Copy any nullable fields defined in Meta
         if hasattr(self.Meta, 'nullable_fields'):
             self.nullable_fields = [field for field in self.Meta.nullable_fields]

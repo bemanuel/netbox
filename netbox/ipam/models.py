@@ -6,6 +6,7 @@ from django.contrib.contenttypes.fields import GenericRelation
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.db.models import Q
 from django.db.models.expressions import RawSQL
 from django.urls import reverse
 from django.utils.encoding import python_2_unicode_compatible
@@ -14,7 +15,6 @@ from dcim.models import Interface
 from extras.models import CustomFieldModel, CustomFieldValue
 from tenancy.models import Tenant
 from utilities.models import CreatedUpdatedModel
-from utilities.utils import csv_format
 from .constants import *
 from .fields import IPNetworkField, IPAddressField
 from .querysets import PrefixQuerySet
@@ -38,7 +38,7 @@ class VRF(CreatedUpdatedModel, CustomFieldModel):
     csv_headers = ['name', 'rd', 'tenant', 'enforce_unique', 'description']
 
     class Meta:
-        ordering = ['name']
+        ordering = ['name', 'rd']
         verbose_name = 'VRF'
         verbose_name_plural = 'VRFs'
 
@@ -49,13 +49,13 @@ class VRF(CreatedUpdatedModel, CustomFieldModel):
         return reverse('ipam:vrf', args=[self.pk])
 
     def to_csv(self):
-        return csv_format([
+        return (
             self.name,
             self.rd,
             self.tenant.name if self.tenant else None,
             self.enforce_unique,
             self.description,
-        ])
+        )
 
     @property
     def display_name(self):
@@ -75,6 +75,8 @@ class RIR(models.Model):
     is_private = models.BooleanField(default=False, verbose_name='Private',
                                      help_text='IP space managed by this RIR is considered private')
 
+    csv_headers = ['name', 'slug', 'is_private']
+
     class Meta:
         ordering = ['name']
         verbose_name = 'RIR'
@@ -85,6 +87,13 @@ class RIR(models.Model):
 
     def get_absolute_url(self):
         return "{}?rir={}".format(reverse('ipam:aggregate_list'), self.slug)
+
+    def to_csv(self):
+        return (
+            self.name,
+            self.slug,
+            self.is_private,
+        )
 
 
 @python_2_unicode_compatible
@@ -147,12 +156,12 @@ class Aggregate(CreatedUpdatedModel, CustomFieldModel):
         super(Aggregate, self).save(*args, **kwargs)
 
     def to_csv(self):
-        return csv_format([
+        return (
             self.prefix,
             self.rir.name,
-            self.date_added.isoformat() if self.date_added else None,
+            self.date_added,
             self.description,
-        ])
+        )
 
     def get_utilization(self):
         """
@@ -173,19 +182,20 @@ class Role(models.Model):
     slug = models.SlugField(unique=True)
     weight = models.PositiveSmallIntegerField(default=1000)
 
+    csv_headers = ['name', 'slug', 'weight']
+
     class Meta:
         ordering = ['weight', 'name']
 
     def __str__(self):
         return self.name
 
-    @property
-    def count_prefixes(self):
-        return self.prefixes.count()
-
-    @property
-    def count_vlans(self):
-        return self.vlans.count()
+    def to_csv(self):
+        return (
+            self.name,
+            self.slug,
+            self.weight,
+        )
 
 
 @python_2_unicode_compatible
@@ -262,7 +272,7 @@ class Prefix(CreatedUpdatedModel, CustomFieldModel):
         super(Prefix, self).save(*args, **kwargs)
 
     def to_csv(self):
-        return csv_format([
+        return (
             self.prefix,
             self.vrf.rd if self.vrf else None,
             self.tenant.name if self.tenant else None,
@@ -273,7 +283,7 @@ class Prefix(CreatedUpdatedModel, CustomFieldModel):
             self.role.name if self.role else None,
             self.is_pool,
             self.description,
-        ])
+        )
 
     def get_status_class(self):
         return STATUS_CHOICE_CLASSES[self.status]
@@ -283,15 +293,23 @@ class Prefix(CreatedUpdatedModel, CustomFieldModel):
 
     def get_child_prefixes(self):
         """
-        Return all Prefixes within this Prefix and VRF.
+        Return all Prefixes within this Prefix and VRF. If this Prefix is a container in the global table, return child
+        Prefixes belonging to any VRF.
         """
-        return Prefix.objects.filter(prefix__net_contained=str(self.prefix), vrf=self.vrf)
+        if self.vrf is None and self.status == PREFIX_STATUS_CONTAINER:
+            return Prefix.objects.filter(prefix__net_contained=str(self.prefix))
+        else:
+            return Prefix.objects.filter(prefix__net_contained=str(self.prefix), vrf=self.vrf)
 
     def get_child_ips(self):
         """
-        Return all IPAddresses within this Prefix and VRF.
+        Return all IPAddresses within this Prefix and VRF. If this Prefix is a container in the global table, return
+        child IPAddresses belonging to any VRF.
         """
-        return IPAddress.objects.filter(address__net_host_contained=str(self.prefix), vrf=self.vrf)
+        if self.vrf is None and self.status == PREFIX_STATUS_CONTAINER:
+            return IPAddress.objects.filter(address__net_host_contained=str(self.prefix))
+        else:
+            return IPAddress.objects.filter(address__net_host_contained=str(self.prefix), vrf=self.vrf)
 
     def get_available_prefixes(self):
         """
@@ -348,7 +366,8 @@ class Prefix(CreatedUpdatedModel, CustomFieldModel):
             child_prefixes = netaddr.IPSet([p.prefix for p in queryset])
             return int(float(child_prefixes.size) / self.prefix.size * 100)
         else:
-            child_count = self.get_child_ips().count()
+            # Compile an IPSet to avoid counting duplicate IPs
+            child_count = netaddr.IPSet([ip.address.ip for ip in self.get_child_ips()]).size
             prefix_size = self.prefix.size
             if self.family == 4 and self.prefix.prefixlen < 31 and not self.is_pool:
                 prefix_size -= 2
@@ -453,7 +472,7 @@ class IPAddress(CreatedUpdatedModel, CustomFieldModel):
         else:
             is_primary = False
 
-        return csv_format([
+        return (
             self.address,
             self.vrf.rd if self.vrf else None,
             self.tenant.name if self.tenant else None,
@@ -464,7 +483,7 @@ class IPAddress(CreatedUpdatedModel, CustomFieldModel):
             self.interface.name if self.interface else None,
             is_primary,
             self.description,
-        ])
+        )
 
     @property
     def device(self):
@@ -494,6 +513,8 @@ class VLANGroup(models.Model):
     slug = models.SlugField()
     site = models.ForeignKey('dcim.Site', related_name='vlan_groups', on_delete=models.PROTECT, blank=True, null=True)
 
+    csv_headers = ['name', 'slug', 'site']
+
     class Meta:
         ordering = ['site', 'name']
         unique_together = [
@@ -508,6 +529,13 @@ class VLANGroup(models.Model):
 
     def get_absolute_url(self):
         return "{}?group_id={}".format(reverse('ipam:vlan_list'), self.pk)
+
+    def to_csv(self):
+        return (
+            self.name,
+            self.slug,
+            self.site.name if self.site else None,
+        )
 
     def get_next_available_vid(self):
         """
@@ -569,7 +597,7 @@ class VLAN(CreatedUpdatedModel, CustomFieldModel):
             })
 
     def to_csv(self):
-        return csv_format([
+        return (
             self.site.name if self.site else None,
             self.group.name if self.group else None,
             self.vid,
@@ -578,7 +606,7 @@ class VLAN(CreatedUpdatedModel, CustomFieldModel):
             self.get_status_display(),
             self.role.name if self.role else None,
             self.description,
-        ])
+        )
 
     @property
     def display_name(self):
@@ -588,6 +616,13 @@ class VLAN(CreatedUpdatedModel, CustomFieldModel):
 
     def get_status_class(self):
         return STATUS_CHOICE_CLASSES[self.status]
+
+    def get_members(self):
+        # Return all interfaces assigned to this VLAN
+        return Interface.objects.filter(
+            Q(untagged_vlan_id=self.pk) |
+            Q(tagged_vlans=self.pk)
+        )
 
 
 @python_2_unicode_compatible

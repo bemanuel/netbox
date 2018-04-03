@@ -47,7 +47,7 @@ class SecretRoleCSVForm(forms.ModelForm):
 
     class Meta:
         model = SecretRole
-        fields = ['name', 'slug']
+        fields = SecretRole.csv_headers
         help_texts = {
             'name': 'Name of secret role',
         }
@@ -58,17 +58,34 @@ class SecretRoleCSVForm(forms.ModelForm):
 #
 
 class SecretForm(BootstrapMixin, forms.ModelForm):
-    plaintext = forms.CharField(max_length=65535, required=False, label='Plaintext',
-                                widget=forms.PasswordInput(attrs={'class': 'requires-session-key'}))
-    plaintext2 = forms.CharField(max_length=65535, required=False, label='Plaintext (verify)',
-                                 widget=forms.PasswordInput())
+    plaintext = forms.CharField(
+        max_length=65535,
+        required=False,
+        label='Plaintext',
+        widget=forms.PasswordInput(attrs={'class': 'requires-session-key'})
+    )
+    plaintext2 = forms.CharField(
+        max_length=65535,
+        required=False,
+        label='Plaintext (verify)',
+        widget=forms.PasswordInput()
+    )
 
     class Meta:
         model = Secret
         fields = ['role', 'name', 'plaintext', 'plaintext2']
 
+    def __init__(self, *args, **kwargs):
+
+        super(SecretForm, self).__init__(*args, **kwargs)
+
+        # A plaintext value is required when creating a new Secret
+        if not self.instance.pk:
+            self.fields['plaintext'].required = True
+
     def clean(self):
 
+        # Verify that the provided plaintext values match
         if self.cleaned_data['plaintext'] != self.cleaned_data['plaintext2']:
             raise forms.ValidationError({
                 'plaintext2': "The two given plaintext values do not match. Please check your input."
@@ -98,7 +115,7 @@ class SecretCSVForm(forms.ModelForm):
 
     class Meta:
         model = Secret
-        fields = ['device', 'role', 'name', 'plaintext']
+        fields = Secret.csv_headers
         help_texts = {
             'name': 'Name or username',
         }
